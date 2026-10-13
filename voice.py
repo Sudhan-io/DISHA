@@ -271,9 +271,18 @@ def _get_whisper_model():
     if _whisper_model is None:
         try:
             from faster_whisper import WhisperModel
-            model_size = getattr(_cfg, "WHISPER_MODEL_SIZE", "base.en")
-            _dbg(f"Loading faster-whisper model '{model_size}'...")
-            _whisper_model = WhisperModel(model_size, device="cpu", compute_type="int8", cpu_threads=6)
+            import ctranslate2
+            model_size = getattr(_cfg, "WHISPER_MODEL_SIZE", "small.en")
+            # Auto-detect CUDA for fast GPU inference (~0.1s on RTX GPU), graceful CPU fallback
+            has_cuda = ctranslate2.get_cuda_device_count() > 0
+            device = "cuda" if has_cuda else "cpu"
+            compute_type = "float16" if device == "cuda" else "int8"
+            _dbg(f"Loading faster-whisper model '{model_size}' on {device} ({compute_type})...")
+            try:
+                _whisper_model = WhisperModel(model_size, device=device, compute_type=compute_type)
+            except Exception as e_dev:
+                _dbg(f"{device} init failed ({e_dev}), falling back to CPU int8...")
+                _whisper_model = WhisperModel(model_size, device="cpu", compute_type="int8", cpu_threads=6)
             _dbg("faster-whisper model loaded successfully!")
         except Exception as e:
             _dbg(f"Failed to load faster-whisper: {e}")

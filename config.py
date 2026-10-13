@@ -23,7 +23,7 @@ VOICE_HOTKEY       = os.getenv("DISHA_VOICE_HOTKEY", "<ctrl>+<alt>+v")
 
 # ── Voice / STT ─────────────────────────────────────────────────────────────
 STT_ENGINE         = os.getenv("DISHA_STT_ENGINE", "whisper").lower() # "whisper" or "vosk"
-WHISPER_MODEL_SIZE = os.getenv("DISHA_WHISPER_MODEL", "base.en")      # "tiny.en", "base.en", "small.en"
+WHISPER_MODEL_SIZE = os.getenv("DISHA_WHISPER_MODEL", "small.en")     # "tiny.en", "base.en", "small.en", "medium.en"
 VOSK_MODEL_PATH    = os.getenv("VOSK_MODEL_PATH", str(BASE_DIR / "model"))
 TTS_ENABLED        = os.getenv("DISHA_TTS_ENABLED", "true").lower() == "true"
 TTS_RATE           = int(os.getenv("DISHA_TTS_RATE", "175"))

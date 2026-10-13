@@ -26,5 +26,11 @@ if not exist "%PYTHONW%" (
     exit /b 1
 )
 
-set DISHA_USB_MODE=true
+cd /d "%DISHA_DIR%"
+
+REM If running from an external portable drive (not C: or D:), enforce USB portable security
+if /i not "%DRIVE%"=="C:" if /i not "%DRIVE%"=="D:" (
+    set DISHA_USB_MODE=true
+)
+
 start "" "%PYTHONW%" "%MAIN%"

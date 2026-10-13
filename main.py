@@ -36,17 +36,49 @@ import usb_guard
 import web_interface
 
 # ---------------------------------------------------------------------------
-# Single-instance guard
+# Single-instance guard with IPC activation
 # ---------------------------------------------------------------------------
 _LOCK_PORT = 54321
 _lock_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
 
-def acquire_single_instance_lock():
+def acquire_single_instance_lock(on_activate: Optional[Callable] = None) -> bool:
+    """
+    Acquires single-instance lock on 127.0.0.1:54321.
+    If another instance is already running, sends 'ACTIVATE' to wake and focus
+    the existing assistant window, then returns False to let this instance exit.
+    If this is the primary instance, listens for activation signals.
+    """
+    global _lock_socket
     try:
         _lock_socket.bind(("127.0.0.1", _LOCK_PORT))
+        _lock_socket.listen(5)
+
+        if on_activate:
+            def _listen_loop():
+                while True:
+                    try:
+                        conn, _ = _lock_socket.accept()
+                        data = conn.recv(1024).decode("utf-8", errors="ignore").strip()
+                        conn.close()
+                        if data == "ACTIVATE":
+                            on_activate()
+                    except Exception:
+                        break
+
+            threading.Thread(target=_listen_loop, daemon=True).start()
+
         return True
     except OSError:
+        # Another instance is already holding the lock! Ping it to activate/show window.
+        try:
+            client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            client.settimeout(1.5)
+            client.connect(("127.0.0.1", _LOCK_PORT))
+            client.sendall(b"ACTIVATE\n")
+            client.close()
+        except Exception:
+            pass
         return False
 
 
@@ -158,6 +190,7 @@ class DishaAssistantWindow:
 
         self._init_styles()
         self._build_ui()
+        self.win.bind("<Escape>", lambda e: self.close())
 
     def _init_styles(self):
         try:
@@ -637,10 +670,8 @@ class DishaAssistantWindow:
         threading.Thread(target=worker, daemon=True).start()
 
     def close(self):
-        global _assistant_window
-        _assistant_window = None
         try:
-            self.win.destroy()
+            self.win.withdraw()
         except Exception:
             pass
 
@@ -899,15 +930,19 @@ def _start_wake_word_thread(root):
 # ---------------------------------------------------------------------------
 
 def main():
-    # USB portable mode identity verification
-    if not usb_guard.check_and_verify():
-        sys.exit(0)
-
-    if not acquire_single_instance_lock():
-        sys.exit(0)
-
     root = tk.Tk()
     root.withdraw()
+
+    # IPC Single-instance guard: if another instance tries to launch, focus this window
+    def _activate_callback():
+        root.after(0, lambda: open_or_focus_assistant(root, mode="text"))
+
+    if not acquire_single_instance_lock(on_activate=_activate_callback):
+        sys.exit(0)
+
+    # USB portable mode identity verification
+    if not usb_guard.check_and_verify(parent=root):
+        sys.exit(0)
 
     # Initialize scheduler with Tk-safe trigger callback
     scheduler.init(on_trigger=lambda msg: _fire_reminder(msg, root))
@@ -917,6 +952,9 @@ def main():
 
     # Launch Desktop Floating Logo Widget
     DesktopLogoWidget(root)
+
+    # Automatically open and focus Assistant Window on launch
+    open_or_focus_assistant(root, mode="text")
 
     # Launch System Tray Icon
     icon = build_tray_icon(root)

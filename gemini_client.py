@@ -146,9 +146,12 @@ def ask_with_screenshot(prompt: str) -> str:
 
         img = None
         try:
-            img = ImageGrab.grab()
+            img = ImageGrab.grab(all_screens=True)
         except Exception:
-            pass
+            try:
+                img = ImageGrab.grab()
+            except Exception:
+                pass
 
         if img is None:
             # Fallback to PowerShell GDI capture
@@ -173,12 +176,27 @@ $bmp.Dispose()
         if img is None:
             return "Unable to capture the screen right now."
 
+        # Ensure image is in RGB format for Gemini Vision
+        if img.mode not in ("RGB", "L"):
+            img = img.convert("RGB")
+
+        # Downscale if massive to reduce latency while keeping text legible
+        if max(img.width, img.height) > 1920:
+            img.thumbnail((1920, 1080))
+
         genai.configure(api_key=GEMINI_API_KEY)
         model = genai.GenerativeModel(
             model_name=GEMINI_MODEL,
             system_instruction=_build_system_prompt(),
         )
-        response = model.generate_content([prompt, img])
+        vision_prompt = (
+            f"You are looking at an actual live screenshot of the user's desktop screen. "
+            f"The user is asking: '{prompt}'. "
+            f"Carefully examine the image and describe or answer based strictly and only on what is genuinely visible. "
+            f"Identify open applications, active windows, text, or websites clearly shown on screen. "
+            f"Do NOT guess or hallucinate any software, editor, or terminal that is not visibly open."
+        )
+        response = model.generate_content([vision_prompt, img])
         return response.text.strip() if response.text else "I couldn't analyze what's on the screen."
     except Exception as e:
         return f"Screen analysis error: {_sanitize_error(e)}"

@@ -95,8 +95,20 @@ def is_exit_command(text: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Routing logic (Multi-tier: System/Apps -> Reminders -> Local Brain -> Gemini)
+# Routing logic (Multi-tier: System/Apps -> Reminders -> Local Brain -> Vision -> Gemini)
 # ---------------------------------------------------------------------------
+
+def is_screen_query(text: str) -> bool:
+    t = text.lower().strip()
+    keywords = [
+        "what's on my screen", "whats on my screen", "what is on my screen",
+        "on my screen", "look at my screen", "see my screen", "read my screen",
+        "check my screen", "analyze my screen", "describe my screen",
+        "what am i looking at", "can you see my screen", "take a look at my screen",
+        "screenshot"
+    ]
+    return any(k in t for k in keywords)
+
 
 def route_request(user_input: str, on_chunk: Optional[Callable[[str], None]] = None) -> str:
     # 0. Extract and persist facts
@@ -114,13 +126,19 @@ def route_request(user_input: str, on_chunk: Optional[Callable[[str], None]] = N
         memory.log_exchange(user_input, sched_response)
         return sched_response
 
-    # 3. Try local brain (date, time, battery, math, wifi, ram) — always offline
+    # 3. Try local brain (date, time, battery, math, wifi, ram, gpu, disk) — always offline
     brain_response = local_brain.try_answer(user_input)
     if brain_response is not None:
         memory.log_exchange(user_input, brain_response)
         return brain_response
 
-    # 4. Gemini (online) with streaming or graceful offline message
+    # 4. Check for screen awareness / vision queries (real desktop capture)
+    if is_screen_query(user_input):
+        vision_reply = gemini_client.ask_with_screenshot(user_input)
+        memory.log_exchange(user_input, vision_reply)
+        return vision_reply
+
+    # 5. Gemini (online) with streaming or graceful offline message
     context = memory.get_recent_context()
     if on_chunk is not None:
         answer = gemini_client.ask_streaming(user_input, context, on_chunk=on_chunk)
@@ -590,11 +608,12 @@ class DishaAssistantWindow:
         if self._current_stream_mark is None:
             timestamp = datetime.now().strftime("%I:%M %p")
             self.chat_text.insert(tk.END, f"✨ DISHA  •  {timestamp}\n", "badge_disha")
-            self._current_stream_mark = self.chat_text.index(f"{tk.END}-1c")
-            self.chat_text.insert(tk.END, f"{accumulated_text}\n\n", "text_disha")
-        else:
-            self.chat_text.delete(self._current_stream_mark, tk.END)
-            self.chat_text.insert(tk.END, f"{accumulated_text}\n\n", "text_disha")
+            self.chat_text.mark_set("stream_mark", "end-1c")
+            self.chat_text.mark_gravity("stream_mark", tk.LEFT)
+            self._current_stream_mark = True
+
+        self.chat_text.delete("stream_mark", "end-1c")
+        self.chat_text.insert("stream_mark", accumulated_text, "text_disha")
         self.chat_text.configure(state=tk.DISABLED)
         self.chat_text.see(tk.END)
 
@@ -602,6 +621,7 @@ class DishaAssistantWindow:
         """Reset streaming marker and insert divider."""
         if self._current_stream_mark is not None:
             self.chat_text.configure(state=tk.NORMAL)
+            self.chat_text.insert(tk.END, "\n\n")
             self.chat_text.insert(tk.END, "─" * 46 + "\n\n", "divider")
             self.chat_text.configure(state=tk.DISABLED)
             self.chat_text.see(tk.END)
@@ -689,7 +709,7 @@ class DishaAssistantWindow:
 
             def on_stream(chunk_text):
                 streamed[0] = True
-                self.root.after(0, lambda: self.append_streaming_chunk(chunk_text))
+                self.root.after(0, lambda t=chunk_text: self.append_streaming_chunk(t))
 
             answer = route_request(heard, on_chunk=on_stream)
             if not streamed[0]:
@@ -725,7 +745,7 @@ class DishaAssistantWindow:
 
             def on_stream(chunk_text):
                 streamed[0] = True
-                self.root.after(0, lambda: self.append_streaming_chunk(chunk_text))
+                self.root.after(0, lambda t=chunk_text: self.append_streaming_chunk(t))
 
             answer = route_request(query, on_chunk=on_stream)
             if not streamed[0]:
@@ -831,7 +851,7 @@ class DishaAssistantWindow:
 
                 def on_stream(chunk_text):
                     streamed[0] = True
-                    self.root.after(0, lambda: self.append_streaming_chunk(chunk_text))
+                    self.root.after(0, lambda t=chunk_text: self.append_streaming_chunk(t))
 
                 answer = route_request(heard, on_chunk=on_stream)
                 if not streamed[0]:

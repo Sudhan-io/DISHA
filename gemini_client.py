@@ -12,20 +12,32 @@ import google.generativeai as genai
 from config import GEMINI_API_KEY, GEMINI_MODEL, SYSTEM_PROMPT
 import memory
 
+import config
 _model = None
 
 
+def _get_api_key() -> str:
+    """Retrieve active API key from config or module attribute dynamically."""
+    return getattr(config, "GEMINI_API_KEY", "") or globals().get("GEMINI_API_KEY", "")
+
+
+def _get_model_name() -> str:
+    """Retrieve active Gemini model name from config or module attribute dynamically."""
+    return getattr(config, "GEMINI_MODEL", "") or globals().get("GEMINI_MODEL", "gemini-2.5-flash")
+
+
 def _build_system_prompt() -> str:
-    """Personalize the system prompt using saved facts (e.g. user_name)."""
-    user_name = memory.get_fact("user_name", "")
+    """Personalize the system prompt using saved facts (e.g. user_name) or config USER_NAME."""
+    user_name = memory.get_fact("user_name", "") or getattr(config, "USER_NAME", "Sudhan")
     fact_context = f"User's name: {user_name}. " if user_name else ""
-    return fact_context + SYSTEM_PROMPT
+    return fact_context + getattr(config, "SYSTEM_PROMPT", SYSTEM_PROMPT)
 
 
 def _get_model():
-    genai.configure(api_key=GEMINI_API_KEY)
+    key = _get_api_key()
+    genai.configure(api_key=key)
     return genai.GenerativeModel(
-        model_name=GEMINI_MODEL,
+        model_name=_get_model_name(),
         system_instruction=_build_system_prompt(),
     )
 
@@ -45,9 +57,14 @@ def is_online(timeout: float = 2.0) -> bool:
 
 def _sanitize_error(e: Exception) -> str:
     """Ensure raw API keys or internal secrets never leak in error messages."""
+    import re
     msg = str(e)
-    if GEMINI_API_KEY and GEMINI_API_KEY in msg:
-        msg = msg.replace(GEMINI_API_KEY, "[REDACTED_API_KEY]")
+    # Check both config and module-level keys
+    for k in (getattr(config, "GEMINI_API_KEY", ""), globals().get("GEMINI_API_KEY", "")):
+        if k and k in msg:
+            msg = msg.replace(k, "[REDACTED_API_KEY]")
+    # Also strip any stray Google API key format (AIza...)
+    msg = re.sub(r"AIza[0-9A-Za-z-_]{16,45}", "[REDACTED_API_KEY]", msg)
     return msg
 
 
@@ -62,8 +79,9 @@ def ask(prompt: str, context: str = "") -> str:
             return local_llm.ask_local(prompt, context)
         return "I'm offline right now, and the local Ollama service is not running. Reconnect or start Ollama."
 
-    if not GEMINI_API_KEY:
-        return "I don't have an API key set up yet — add one to your .env file."
+    api_key = _get_api_key()
+    if not api_key:
+        return "I don't have an API key set up yet — add one to your .env file or open Settings (⚙️)."
 
     try:
         model = _get_model()
@@ -75,8 +93,8 @@ def ask(prompt: str, context: str = "") -> str:
         if local_llm.is_ollama_running():
             return local_llm.ask_local(prompt, context)
         err = _sanitize_error(e)
-        if "429" in err:
-            return "Gemini quota limit reached. Please wait a bit or start Ollama for offline GPU mode."
+        if "429" in err or "quota" in err.lower() or "resource_exhausted" in err.lower():
+            return "Gemini quota limit reached (429). Please update your API key in Settings (⚙️) or launch Ollama for offline local inference."
         return f"Something went wrong reaching Gemini: {err}"
 
 
@@ -97,8 +115,9 @@ def ask_streaming(prompt: str, context: str = "", on_chunk: Optional[Callable[[s
         on_chunk(msg)
         return msg
 
-    if not GEMINI_API_KEY:
-        msg = "I don't have an API key set up yet — add one to your .env file."
+    api_key = _get_api_key()
+    if not api_key:
+        msg = "I don't have an API key set up yet — add one to your .env file or open Settings (⚙️)."
         on_chunk(msg)
         return msg
 
@@ -118,8 +137,8 @@ def ask_streaming(prompt: str, context: str = "", on_chunk: Optional[Callable[[s
         if local_llm.is_ollama_running():
             return local_llm.ask_local_streaming(prompt, context, on_chunk=on_chunk)
         err = _sanitize_error(e)
-        if "429" in err:
-            msg = "Gemini quota limit reached. Please wait a bit or start Ollama for offline GPU mode."
+        if "429" in err or "quota" in err.lower() or "resource_exhausted" in err.lower():
+            msg = "Gemini quota limit reached (429). Please update your API key in Settings (⚙️) or launch Ollama for offline local inference."
         else:
             msg = f"Something went wrong reaching Gemini: {err}"
         on_chunk(msg)
@@ -135,12 +154,13 @@ def ask_with_screenshot(prompt: str) -> str:
     if not is_online():
         return "Screen awareness requires an internet connection for multimodal AI analysis."
 
-    if not GEMINI_API_KEY:
-        return "I don't have a Gemini API key set up yet in .env."
+    api_key = _get_api_key()
+    if not api_key:
+        return "I don't have a Gemini API key set up yet — add one in Settings (⚙️) or .env."
 
     temp_path = None
     try:
-        from PIL import ImageGrab
+        from PIL import Image, ImageGrab
         import subprocess
         from config import BASE_DIR
 
@@ -151,7 +171,7 @@ def ask_with_screenshot(prompt: str) -> str:
             try:
                 img = ImageGrab.grab()
             except Exception:
-                pass
+                img = None
 
         if img is None:
             # Fallback to PowerShell GDI capture
@@ -168,13 +188,16 @@ $bmp.Save('{temp_path_str}', [System.Drawing.Imaging.ImageFormat]::Png)
 $graphics.Dispose()
 $bmp.Dispose()
 """
-            subprocess.run(["powershell", "-NoProfile", "-Command", ps_script], capture_output=True, timeout=5)
-            from PIL import Image
-            if temp_path.exists():
-                img = Image.open(temp_path)
+            try:
+                subprocess.run(["powershell", "-NoProfile", "-Command", ps_script], capture_output=True, timeout=5)
+                if temp_path.exists():
+                    with Image.open(temp_path) as opened_img:
+                        img = opened_img.copy()
+            except Exception:
+                pass
 
         if img is None:
-            return "Unable to capture the screen right now."
+            return "Unable to capture the screen right now. Please ensure your desktop is active and unlocked."
 
         # Ensure image is in RGB format for Gemini Vision
         if img.mode not in ("RGB", "L"):
@@ -184,11 +207,7 @@ $bmp.Dispose()
         if max(img.width, img.height) > 1920:
             img.thumbnail((1920, 1080))
 
-        genai.configure(api_key=GEMINI_API_KEY)
-        model = genai.GenerativeModel(
-            model_name=GEMINI_MODEL,
-            system_instruction=_build_system_prompt(),
-        )
+        model = _get_model()
         vision_prompt = (
             f"You are looking at an actual live screenshot of the user's desktop screen. "
             f"The user is asking: '{prompt}'. "

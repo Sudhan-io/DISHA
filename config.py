@@ -28,7 +28,7 @@ VOSK_MODEL_PATH    = os.getenv("VOSK_MODEL_PATH", str(BASE_DIR / "model"))
 TTS_ENABLED        = os.getenv("DISHA_TTS_ENABLED", "true").lower() == "true"
 TTS_RATE           = int(os.getenv("DISHA_TTS_RATE", "175"))
 TTS_VOICE_GENDER   = os.getenv("DISHA_TTS_VOICE", "female")
-SILENCE_STOP_SECONDS = float(os.getenv("DISHA_SILENCE_STOP", "1.4"))
+SILENCE_STOP_SECONDS = float(os.getenv("DISHA_SILENCE_STOP", "1.6"))
 
 # ── Wake Word ────────────────────────────────────────────────────────────────
 WAKE_WORD_ENABLED  = os.getenv("DISHA_WAKE_WORD", "false").lower() == "true"
@@ -70,7 +70,7 @@ APP_COMMANDS: dict[str, str] = {
 }
 
 # ── User Profile & Personality ───────────────────────────────────────────────
-USER_NAME = os.getenv("USER_NAME", "User")
+USER_NAME = os.getenv("USER_NAME", "Sudhan")
 
 SYSTEM_PROMPT = f"""You are DISHA, a personal desktop companion for {USER_NAME}.
 Keep replies SHORT — 2 sentences max unless asked to elaborate.

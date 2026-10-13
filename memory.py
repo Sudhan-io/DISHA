@@ -97,11 +97,18 @@ def load_all_facts() -> dict:
 
 # ── Fact Extraction (called from route_request before AI) ─────────────────────
 
+COMMON_NON_NAMES = {
+    "not", "good", "fine", "ok", "okay", "here", "there", "back", "done",
+    "ready", "tired", "busy", "happy", "sad", "sorry", "just", "sure",
+    "trying", "going", "looking", "working", "feeling", "wondering",
+    "asking", "curious", "bored", "hungry", "free", "human", "user",
+    "admin", "disha", "someone", "nobody", "anybody", "anything", "nothing",
+    "something", "them", "him", "her", "it", "this", "that"
+}
+
 _FACT_PATTERNS = [
-    # "my name is X" / "I'm X" / "call me X"
-    (r"my name is ([A-Za-z]+)", "user_name"),
-    (r"call me ([A-Za-z]+)", "user_name"),
-    (r"i(?:'m| am) ([A-Za-z]+)", "user_name"),
+    # Explicit name introductions only — never match bare "I'm / I am" to avoid adjectives like "I'm not"
+    (r"(?:my name is|call me|you can call me|i am called)\s+([A-Za-z]+)", "user_name"),
     # "remember that X"
     (r"remember (?:that )?(.+)", "memory_note"),
 ]
@@ -117,5 +124,11 @@ def extract_and_store_facts(text: str) -> None:
     for pattern, key in _FACT_PATTERNS:
         m = re.search(pattern, lowered)
         if m:
-            value = m.group(1).strip().title() if key == "user_name" else m.group(1).strip()
+            raw_val = m.group(1).strip()
+            if key == "user_name":
+                if raw_val.lower() in COMMON_NON_NAMES or len(raw_val) < 2:
+                    continue
+                value = raw_val.title()
+            else:
+                value = raw_val
             save_fact(key, value)

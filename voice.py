@@ -34,13 +34,13 @@ vosk.SetLogLevel(-1)  # quiet Vosk's default console spam
 # ---------------------------------------------------------------------------
 # Tunables (optional: define any of these in config.py to override)
 # ---------------------------------------------------------------------------
-MIN_RMS = getattr(_cfg, "VOICE_MIN_RMS", 250.0)               # absolute loudness floor (int16 RMS)
-NOISE_MARGIN = getattr(_cfg, "VOICE_NOISE_MARGIN", 2.5)       # speech must be this x louder than room noise
-MIN_SPEECH_SECONDS = getattr(_cfg, "VOICE_MIN_SPEECH_SECONDS", 0.3)
-NO_SPEECH_TIMEOUT = getattr(_cfg, "VOICE_NO_SPEECH_TIMEOUT", 4.0)   # give up if you never speak
-MAX_LISTEN_SECONDS = getattr(_cfg, "VOICE_MAX_SECONDS", 15.0)
-MIN_AVG_CONF = getattr(_cfg, "VOICE_MIN_AVG_CONF", 0.80)      # average word confidence required
-SINGLE_WORD_CONF = getattr(_cfg, "VOICE_SINGLE_WORD_CONF", 0.92)  # one-word results must be surer
+MIN_RMS = getattr(_cfg, "VOICE_MIN_RMS", 120.0)               # absolute loudness floor (int16 RMS)
+NOISE_MARGIN = getattr(_cfg, "VOICE_NOISE_MARGIN", 1.8)       # speech must be this x louder than room noise
+MIN_SPEECH_SECONDS = getattr(_cfg, "VOICE_MIN_SPEECH_SECONDS", 0.2)
+NO_SPEECH_TIMEOUT = getattr(_cfg, "VOICE_NO_SPEECH_TIMEOUT", 5.0)   # give up if you never speak
+MAX_LISTEN_SECONDS = getattr(_cfg, "VOICE_MAX_SECONDS", 20.0)
+MIN_AVG_CONF = getattr(_cfg, "VOICE_MIN_AVG_CONF", 0.45)      # average word confidence required (for Vosk)
+SINGLE_WORD_CONF = getattr(_cfg, "VOICE_SINGLE_WORD_CONF", 0.60)  # one-word results must be surer (for Vosk)
 
 _mic_cfg = getattr(_cfg, "MIC_DEVICE", os.getenv("DISHA_MIC_DEVICE", ""))
 if isinstance(_mic_cfg, str):
@@ -310,6 +310,8 @@ def listen(sample_rate: int = 16000, max_seconds: float = None, on_partial=None)
         def callback(indata, frames, time_info, status):
             audio_queue.put(bytes(indata))
 
+        import collections
+        pre_roll = collections.deque(maxlen=6)  # 600ms pre-roll buffer so initial words are never clipped
         parts = []
         recorded_blocks = []
         speech_blocks = 0
@@ -346,13 +348,19 @@ def listen(sample_rate: int = 16000, max_seconds: float = None, on_partial=None)
                         speech_blocks += 1
                         last_speech_t = now
                         if speech_blocks >= min_speech_blocks:
-                            started = True
+                            if not started:
+                                started = True
+                                # Prepend pre-roll buffer so the start of the first word is fully preserved
+                                recorded_blocks.extend(pre_roll)
                     else:
+                        speech_blocks = max(0, speech_blocks - 1)
                         # learn the room's background level from non-speech blocks
                         _noise_floor = 0.97 * _noise_floor + 0.03 * level
 
                     if started:
                         recorded_blocks.append(data)
+                    else:
+                        pre_roll.append(data)
 
                     if DEBUG and int(now * 10) % 5 == 0:
                         _dbg(f"rms={level:6.0f} thr={threshold:6.0f} floor={_noise_floor:6.0f} speech={is_speech}")
@@ -390,7 +398,15 @@ def listen(sample_rate: int = 16000, max_seconds: float = None, on_partial=None)
                         on_partial("Transcribing...")
                     raw_audio = b"".join(recorded_blocks)
                     audio_np = np.frombuffer(raw_audio, dtype=np.int16).astype(np.float32) / 32768.0
-                    segments, _ = w_model.transcribe(audio_np, language="en", beam_size=2)
+                    segments, _ = w_model.transcribe(
+                        audio_np,
+                        language="en",
+                        beam_size=2,
+                        vad_filter=True,
+                        vad_parameters=dict(min_silence_duration_ms=400),
+                        condition_on_previous_text=False,
+                        initial_prompt="Hey DISHA, Sudhan, open Chrome, Spotify, what's on my screen, battery, reminders.",
+                    )
                     whisper_text = " ".join(s.text.strip() for s in segments).strip()
                     if whisper_text:
                         _dbg(f"faster-whisper result: '{whisper_text}'")

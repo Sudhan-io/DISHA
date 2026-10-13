@@ -26,6 +26,23 @@ def log_exchange(user_input: str, disha_response: str) -> None:
         pass
 
 
+import os
+
+
+def _atomic_write_text(filepath, content: str) -> None:
+    """Write text atomically via temporary file and os.replace to prevent corruption."""
+    temp_path = filepath.with_suffix(".tmp")
+    try:
+        temp_path.write_text(content, encoding="utf-8")
+        os.replace(temp_path, filepath)
+    except OSError:
+        try:
+            if temp_path.exists():
+                temp_path.unlink()
+        except OSError:
+            pass
+
+
 def _trim_log() -> None:
     """Keep only the most recent MEMORY_MAX_ENTRIES lines."""
     if not MEMORY_FILE.exists():
@@ -34,7 +51,7 @@ def _trim_log() -> None:
         lines = MEMORY_FILE.read_text(encoding="utf-8").splitlines()
         if len(lines) > MEMORY_MAX_ENTRIES:
             trimmed = lines[-MEMORY_MAX_ENTRIES:]
-            MEMORY_FILE.write_text("\n".join(trimmed) + "\n", encoding="utf-8")
+            _atomic_write_text(MEMORY_FILE, "\n".join(trimmed) + "\n")
     except OSError:
         pass
 
@@ -67,15 +84,15 @@ def get_recent_context(n: int = 5) -> str:
 
 def save_fact(key: str, value: str) -> None:
     """
-    Persist a user fact (e.g. "user_name" -> "Alice").
-    Creates facts.json if absent. Thread-safe via try/except.
+    Persist a user fact (e.g. "user_name" -> "Sudhan").
+    Creates facts.json if absent. Atomically writes to avoid corruption.
     key: lowercase snake_case string
     value: string
     """
     facts = load_all_facts()
     facts[key] = value
     try:
-        FACTS_FILE.write_text(json.dumps(facts, ensure_ascii=False, indent=2), encoding="utf-8")
+        _atomic_write_text(FACTS_FILE, json.dumps(facts, ensure_ascii=False, indent=2))
     except OSError:
         pass
 
@@ -107,10 +124,10 @@ COMMON_NON_NAMES = {
 }
 
 _FACT_PATTERNS = [
-    # Explicit name introductions only — never match bare "I'm / I am" to avoid adjectives like "I'm not"
-    (r"(?:my name is|call me|you can call me|i am called)\s+([A-Za-z]+)", "user_name"),
-    # "remember that X"
-    (r"remember (?:that )?(.+)", "memory_note"),
+    # Explicit name introductions — single or first/last name
+    (r"(?:my name is|call me|you can call me|i am called)\s+([A-Za-z]+(?:\s+[A-Za-z]+)?)", "user_name"),
+    # "remember that X" or "remember to X" or "remember: X"
+    (r"remember\s*(?:that|to|:)?\s*(.+)", "memory_note"),
 ]
 
 
@@ -120,13 +137,13 @@ def extract_and_store_facts(text: str) -> None:
     Called before routing to Gemini so facts are captured even from AI queries.
     Never modifies the text — side-effect only.
     """
-    lowered = text.strip().lower()
     for pattern, key in _FACT_PATTERNS:
-        m = re.search(pattern, lowered)
+        m = re.search(pattern, text, re.IGNORECASE)
         if m:
             raw_val = m.group(1).strip()
             if key == "user_name":
-                if raw_val.lower() in COMMON_NON_NAMES or len(raw_val) < 2:
+                words = raw_val.split()
+                if any(w.lower() in COMMON_NON_NAMES for w in words) or len(raw_val) < 2:
                     continue
                 value = raw_val.title()
             else:

@@ -77,12 +77,24 @@ def try_schedule_command(text: str) -> Optional[str]:
         _add_reminder(msg, due)
         return f"Reminder set for {due.strftime('%I:%M %p')} — '{msg}'."
 
+    # Pattern: "clear reminders" / "cancel reminders" / "delete reminders"
+    if re.search(r"\b(?:clear|cancel|delete|remove)\s+(?:all\s+)?reminders\b", lowered):
+        _save([])
+        return "All reminders and timers have been cleared."
+
     # Pattern: "what are my reminders" / "list reminders" / "show reminders"
     if re.search(r"\b(?:what are my|list|show)\s+reminders\b", lowered):
         rems = [r for r in _load() if not r.get("triggered", False)]
         if not rems:
             return "You have no active reminders right now."
-        lines = [f"- {r['message']} (due at {r['due'][11:16]})" for r in rems]
+        lines = []
+        for r in rems:
+            try:
+                dt = datetime.datetime.fromisoformat(r["due"])
+                time_str = dt.strftime("%I:%M %p")
+            except Exception:
+                time_str = r.get("due", "")[11:16]
+            lines.append(f"- {r['message']} (due at {time_str})")
         return "Your active reminders:\n" + "\n".join(lines)
 
     return None
@@ -147,9 +159,16 @@ def _load() -> list:
 
 
 def _save(reminders: list) -> None:
+    import os
+    temp_path = REMINDERS_FILE.with_suffix(".tmp")
     try:
-        REMINDERS_FILE.write_text(
+        temp_path.write_text(
             json.dumps(reminders, ensure_ascii=False, indent=2), encoding="utf-8"
         )
+        os.replace(temp_path, REMINDERS_FILE)
     except OSError:
-        pass
+        try:
+            if temp_path.exists():
+                temp_path.unlink()
+        except OSError:
+            pass

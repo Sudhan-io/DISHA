@@ -45,6 +45,36 @@ def _ans_ram(m, text: str) -> str:
     return f"RAM: {used_gb:.1f} GB used of {total_gb:.1f} GB ({mem.percent:.0f}%)."
 
 
+def _ans_gpu(m, text: str) -> str:
+    try:
+        res = subprocess.run(
+            ["nvidia-smi", "--query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu,name", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=2
+        )
+        if res.returncode == 0 and res.stdout.strip():
+            parts = [p.strip() for p in res.stdout.strip().split(",")]
+            util, mem_used, mem_total, temp, name = parts[0], parts[1], parts[2], parts[3], parts[4]
+            return f"{name}: {util}% utilization ({temp}°C, VRAM: {mem_used} MB of {mem_total} MB used)."
+    except Exception:
+        pass
+    return "GPU metrics could not be retrieved from hardware sensors."
+
+
+def _ans_disk(m, text: str) -> str:
+    parts = []
+    for p in psutil.disk_partitions(all=False):
+        try:
+            usage = psutil.disk_usage(p.mountpoint)
+            used_gb = usage.used / (1024**3)
+            total_gb = usage.total / (1024**3)
+            free_gb = usage.free / (1024**3)
+            drive_name = p.device.rstrip("\\")
+            parts.append(f"{drive_name} {used_gb:.1f}/{total_gb:.1f} GB ({usage.percent:.0f}%, {free_gb:.1f} GB free)")
+        except Exception:
+            continue
+    return "Disk Space: " + ", ".join(parts) if parts else "Unable to read disk usage."
+
+
 def _ans_wifi(m, text: str) -> str:
     try:
         result = subprocess.run(
@@ -126,13 +156,15 @@ _PATTERNS: list[tuple[str, Callable]] = [
     (r"\bdate\b|\btoday\b|\bwhat day\b|\bday today\b", _ans_date),
     (r"\bbattery\b|\bcharge\b", _ans_battery),
     (r"\bcpu\b|\bprocessor\b", _ans_cpu),
+    (r"\bgpu\b|\bgraphics\b|\bvram\b|\bnvidia\b|\brtx\b", _ans_gpu),
     (r"\bram\b|\bmemory\b|\bram usage\b", _ans_ram),
+    (r"\bdisk\b|\bstorage\b|\bdrive space\b|\bhard drive\b|\bssd\b", _ans_disk),
     (r"\bwifi\b|\bwi-?fi\b|\bnetwork\b", _ans_wifi),
     (r"(\d+\.?\d*)\s*\+\s*(\d+\.?\d*)", _ans_math_add),
     (r"(\d+\.?\d*)\s*\*\s*(\d+\.?\d*)", _ans_math_mul),
     (r"(\d+\.?\d*)\s*/\s*(\d+\.?\d*)", _ans_math_div),
     (r"(\d+\.?\d*)\s*-\s*(\d+\.?\d*)", _ans_math_sub),
-    (r"what can you do|your features|help me", _ans_help),
+    (r"what can (you|u) do|what do (you|u) do|what can disha do|features|capabilities|help me", _ans_help),
     (r"\bhi\b|\bhello\b|\bhey\b", _ans_greeting),
     (r"\bthank(s| you)\b", _ans_thanks),
 ]

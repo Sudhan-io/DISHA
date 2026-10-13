@@ -71,7 +71,13 @@ def ask(prompt: str, context: str = "") -> str:
         response = model.generate_content(full_prompt)
         return response.text.strip() if response.text else "I didn't get a response back — try rephrasing?"
     except Exception as e:
-        return f"Something went wrong reaching Gemini: {_sanitize_error(e)}"
+        import local_llm
+        if local_llm.is_ollama_running():
+            return local_llm.ask_local(prompt, context)
+        err = _sanitize_error(e)
+        if "429" in err:
+            return "Gemini quota limit reached. Please wait a bit or start Ollama for offline GPU mode."
+        return f"Something went wrong reaching Gemini: {err}"
 
 
 def ask_streaming(prompt: str, context: str = "", on_chunk: Optional[Callable[[str], None]] = None) -> str:
@@ -108,7 +114,14 @@ def ask_streaming(prompt: str, context: str = "", on_chunk: Optional[Callable[[s
         result = "".join(accumulated).strip()
         return result if result else "I didn't get a response back — try rephrasing?"
     except Exception as e:
-        msg = f"Something went wrong reaching Gemini: {_sanitize_error(e)}"
+        import local_llm
+        if local_llm.is_ollama_running():
+            return local_llm.ask_local_streaming(prompt, context, on_chunk=on_chunk)
+        err = _sanitize_error(e)
+        if "429" in err:
+            msg = "Gemini quota limit reached. Please wait a bit or start Ollama for offline GPU mode."
+        else:
+            msg = f"Something went wrong reaching Gemini: {err}"
         on_chunk(msg)
         return msg
 

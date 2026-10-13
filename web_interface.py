@@ -15,7 +15,7 @@ from typing import Callable, Optional
 from flask import Flask, abort, jsonify, render_template_string, request
 import psutil
 
-from config import WEB_ENABLED, WEB_HOST, WEB_PORT, WEB_TOKEN
+from config import WEB_ENABLED, WEB_HOST, WEB_PORT, WEB_TOKEN, ICON_PATH
 import gemini_client
 
 _app = Flask(__name__)
@@ -76,11 +76,12 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>DISHA — Mobile Companion</title>
+  <link rel="icon" type="image/png" href="/icon.png">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
-      background-color: #1e1e2e;
-      color: #cdd6f4;
+      background-color: #0d0f17;
+      color: #f1f5f9;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
       height: 100vh;
       display: flex;
@@ -88,30 +89,26 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       overflow: hidden;
     }
     header {
-      background: #181825;
+      background: #131622;
       padding: 12px 16px;
       display: flex;
       align-items: center;
       justify-content: space-between;
-      border-bottom: 1px solid #313244;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+      border-bottom: 1px solid #1e2438;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.5);
     }
     .brand {
       display: flex;
       align-items: center;
-      gap: 10px;
+      gap: 12px;
     }
-    .logo {
-      width: 32px;
-      height: 32px;
-      background: #a6e3a1;
-      color: #11111b;
-      font-weight: 900;
+    .logo-img {
+      width: 36px;
+      height: 36px;
       border-radius: 50%;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 16px;
+      border: 1.5px solid #00d2ff;
+      box-shadow: 0 0 10px rgba(0, 210, 255, 0.4);
+      object-fit: cover;
     }
     .title {
       font-weight: 700;
@@ -290,10 +287,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 <body>
   <header>
     <div class="brand">
-      <div class="logo">D</div>
+      <img src="/icon.png" class="logo-img" alt="DISHA Logo">
       <div>
         <div class="title">DISHA Mobile</div>
-        <div style="font-size: 10px; color: #a6adc8;" id="host-ip">Local Companion</div>
+        <div style="font-size: 10px; color: #00d2ff; font-weight: 600;" id="host-ip">Hybrid AI Companion</div>
       </div>
     </div>
     <div class="status-badge" onclick="promptToken()">
@@ -446,6 +443,15 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 </body>
 </html>
 """
+
+
+@_app.route("/icon.png")
+def app_icon():
+    """Serve the high-res DISHA app emblem."""
+    from flask import send_file
+    if ICON_PATH.exists():
+        return send_file(ICON_PATH, mimetype="image/png")
+    abort(404)
 
 
 @_app.route("/")

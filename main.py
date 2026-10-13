@@ -17,11 +17,12 @@ import socket
 import sys
 import threading
 import tkinter as tk
+from tkinter import ttk
 from datetime import datetime
 from typing import Optional, Callable
 
 import pystray
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageTk, ImageOps
 from pynput import keyboard
 
 from config import APP_NAME, HOTKEY, VOICE_HOTKEY, ICON_PATH, WAKE_WORD_ENABLED, WEB_ENABLED, WEB_PORT
@@ -115,78 +116,180 @@ def center_window(win, width: int, height: int):
 _assistant_window = None
 
 
+_assistant_window = None
+
+
+def _load_circle_icon(size: tuple[int, int]) -> Optional[ImageTk.PhotoImage]:
+    """Helper to load assets/icon.png with a clean anti-aliased circular alpha mask."""
+    if not ICON_PATH.exists():
+        return None
+    try:
+        im = Image.open(ICON_PATH).convert("RGBA")
+        im_resized = im.resize(size, Image.Resampling.LANCZOS)
+        mask = Image.new("L", size, 0)
+        draw = ImageDraw.Draw(mask)
+        draw.ellipse((0, 0, size[0], size[1]), fill=255)
+        im_circle = ImageOps.fit(im_resized, mask.size, centering=(0.5, 0.5))
+        im_circle.putalpha(mask)
+        return ImageTk.PhotoImage(im_circle)
+    except Exception:
+        return None
+
+
 class DishaAssistantWindow:
+    """
+    Sleek, futuristic desktop companion window with dark obsidian glassmorphism,
+    message card feed, audio visualizer, quick action chips, and custom dark scrollbars.
+    """
+
     def __init__(self, root):
         self.root = root
         self.win = tk.Toplevel(root)
-        self.win.title("DISHA Companion")
+        self.win.title("DISHA AI Companion")
         self.win.overrideredirect(True)
         self.win.attributes("-topmost", True)
-        self.win.configure(bg="#1e1e2e")
-        center_window(self.win, 520, 480)
+        self.win.configure(bg="#0b0d14")
+        center_window(self.win, 560, 620)
 
-        # Allow dragging the window by header
         self._drag_data = {"x": 0, "y": 0}
         self._current_stream_mark = None
+        self._animating_vis = False
+        self._vis_phase = 0
 
+        self._init_styles()
         self._build_ui()
 
+    def _init_styles(self):
+        try:
+            style = ttk.Style()
+            style.theme_use("clam")
+            style.configure(
+                "Dark.Vertical.TScrollbar",
+                gripcount=0,
+                background="#1e2438",
+                darkcolor="#0d0f17",
+                lightcolor="#0d0f17",
+                troughcolor="#090b12",
+                bordercolor="#090b12",
+                arrowcolor="#38bdf8",
+            )
+            style.map(
+                "Dark.Vertical.TScrollbar",
+                background=[("active", "#2d3752"), ("pressed", "#3b82f6")],
+            )
+        except Exception:
+            pass
+
     def _build_ui(self):
-        # Header / Title Bar
-        header = tk.Frame(self.win, bg="#181825", height=40)
+        # 1px Neon Obsidian Outer Border
+        outer_border = tk.Frame(self.win, bg="#20263b", padx=1, pady=1)
+        outer_border.pack(fill="both", expand=True)
+
+        main_container = tk.Frame(outer_border, bg="#0d0f17")
+        main_container.pack(fill="both", expand=True)
+
+        # ── Header Bar ────────────────────────────────────────────────────────
+        header = tk.Frame(main_container, bg="#131622", height=48)
         header.pack(fill="x", side="top")
 
+        # App Icon + Title
+        left_group = tk.Frame(header, bg="#131622")
+        left_group.pack(side="left", padx=14, pady=8)
+
+        self.header_icon = _load_circle_icon((28, 28))
+        if self.header_icon:
+            icon_lbl = tk.Label(left_group, image=self.header_icon, bg="#131622")
+            icon_lbl.pack(side="left", padx=(0, 10))
+
+        brand_frame = tk.Frame(left_group, bg="#131622")
+        brand_frame.pack(side="left")
+
         title_lbl = tk.Label(
-            header,
-            text="✨ DISHA Desktop Companion",
-            bg="#181825",
-            fg="#a6e3a1",
-            font=("Segoe UI", 11, "bold"),
-        )
-        title_lbl.pack(side="left", padx=14, pady=8)
-
-        # Visual indicator badge (idle/listening)
-        self.indicator_dot = tk.Label(
-            header,
-            text="● IDLE",
-            bg="#181825",
-            fg="#585b70",
-            font=("Segoe UI", 9, "bold"),
-        )
-        self.indicator_dot.pack(side="left", padx=4)
-
-        close_btn = tk.Label(
-            header,
-            text=" ✕ ",
-            bg="#181825",
-            fg="#f38ba8",
+            brand_frame,
+            text="DISHA",
+            bg="#131622",
+            fg="#f8fafc",
             font=("Segoe UI", 12, "bold"),
+        )
+        title_lbl.pack(side="left")
+
+        tag_lbl = tk.Label(
+            brand_frame,
+            text=" HYBRID AI",
+            bg="#131622",
+            fg="#00d2ff",
+            font=("Segoe UI", 8, "bold"),
+        )
+        tag_lbl.pack(side="left", padx=(4, 0), pady=(3, 0))
+
+        # Status Pill Badge in Header
+        self.status_pill = tk.Label(
+            header,
+            text=" ● READY ",
+            bg="#064e3b",
+            fg="#34d399",
+            font=("Segoe UI", 8, "bold"),
+            padx=8,
+            pady=2,
+            bd=0,
+        )
+        self.status_pill.pack(side="left", padx=12)
+
+        # Window Controls (Clear History + Close)
+        right_group = tk.Frame(header, bg="#131622")
+        right_group.pack(side="right", padx=12)
+
+        clear_btn = tk.Label(
+            right_group,
+            text="🗑️",
+            bg="#131622",
+            fg="#64748b",
+            font=("Segoe UI", 10),
             cursor="hand2",
         )
-        close_btn.pack(side="right", padx=10)
+        clear_btn.pack(side="left", padx=(0, 10))
+        clear_btn.bind("<Button-1>", lambda e: self.clear_chat())
+
+        close_btn = tk.Label(
+            right_group,
+            text=" ✕ ",
+            bg="#131622",
+            fg="#94a3b8",
+            font=("Segoe UI", 11, "bold"),
+            cursor="hand2",
+        )
+        close_btn.pack(side="left")
         close_btn.bind("<Button-1>", lambda e: self.close())
+        close_btn.bind("<Enter>", lambda e: close_btn.configure(fg="#f43f5e"))
+        close_btn.bind("<Leave>", lambda e: close_btn.configure(fg="#94a3b8"))
 
-        header.bind("<Button-1>", self._start_drag)
-        header.bind("<B1-Motion>", self._do_drag)
-        title_lbl.bind("<Button-1>", self._start_drag)
-        title_lbl.bind("<B1-Motion>", self._do_drag)
+        # Drag bindings
+        for widget in (header, left_group, brand_frame, title_lbl, tag_lbl):
+            widget.bind("<Button-1>", self._start_drag)
+            widget.bind("<B1-Motion>", self._do_drag)
 
-        # Scrollable Chat History Area
-        chat_frame = tk.Frame(self.win, bg="#181825")
-        chat_frame.pack(fill="both", expand=True, padx=14, pady=(10, 6))
+        # ── Glowing Voice Waveform / Visualizer Line ──────────────────────────
+        self.vis_canvas = tk.Canvas(main_container, height=4, bg="#131622", highlightthickness=0)
+        self.vis_canvas.pack(fill="x")
+        self._draw_visualizer(active=False)
 
-        scrollbar = tk.Scrollbar(chat_frame, bg="#313244", troughcolor="#181825", bd=0, relief="flat")
+        # ── Scrollable Chat Feed ──────────────────────────────────────────────
+        chat_frame = tk.Frame(main_container, bg="#0d0f17")
+        chat_frame.pack(fill="both", expand=True, padx=12, pady=(8, 4))
+
+        scrollbar = ttk.Scrollbar(chat_frame, orient="vertical", style="Dark.Vertical.TScrollbar")
         scrollbar.pack(side="right", fill="y")
 
         self.chat_text = tk.Text(
             chat_frame,
-            bg="#181825",
-            fg="#cdd6f4",
-            insertbackground="#cdd6f4",
+            bg="#0d0f17",
+            fg="#e2e8f0",
+            insertbackground="#00d2ff",
+            selectbackground="#252c42",
             font=("Segoe UI", 10),
             wrap="word",
-            padx=12,
-            pady=10,
+            padx=14,
+            pady=12,
             bd=0,
             highlightthickness=0,
             yscrollcommand=scrollbar.set,
@@ -195,74 +298,153 @@ class DishaAssistantWindow:
         self.chat_text.pack(side="left", fill="both", expand=True)
         scrollbar.config(command=self.chat_text.yview)
 
-        # Configure style tags for chat roles
-        self.chat_text.tag_configure("time", foreground="#6c7086", font=("Segoe UI", 9))
-        self.chat_text.tag_configure("role_you", foreground="#89b4fa", font=("Segoe UI", 10, "bold"))
-        self.chat_text.tag_configure("role_disha", foreground="#a6e3a1", font=("Segoe UI", 10, "bold"))
-        self.chat_text.tag_configure("role_system", foreground="#fab387", font=("Segoe UI", 10, "bold"))
-        self.chat_text.tag_configure("msg_text", foreground="#cdd6f4", font=("Segoe UI", 10))
+        # Style tags for card bubbles
+        self.chat_text.tag_configure("badge_user", foreground="#818cf8", font=("Segoe UI", 9, "bold"), lmargin1=10, lmargin2=10)
+        self.chat_text.tag_configure("text_user", foreground="#f1f5f9", font=("Segoe UI", 10), lmargin1=10, lmargin2=10, rmargin=10)
 
-        # Initial welcome message in chat
-        self.append_message("System", "Ready. Press 🎤 Listen, type below, or say 'bye' to exit.")
+        self.chat_text.tag_configure("badge_disha", foreground="#00d2ff", font=("Segoe UI", 9, "bold"), lmargin1=10, lmargin2=10)
+        self.chat_text.tag_configure("text_disha", foreground="#e2e8f0", font=("Segoe UI", 10), lmargin1=10, lmargin2=10, rmargin=10)
 
-        # Status Bar (shows real-time listening/thinking state)
-        status_frame = tk.Frame(self.win, bg="#1e1e2e")
-        status_frame.pack(fill="x", padx=14, pady=(0, 6))
+        self.chat_text.tag_configure("badge_reminder", foreground="#f59e0b", font=("Segoe UI", 9, "bold"), lmargin1=10, lmargin2=10)
+        self.chat_text.tag_configure("text_reminder", foreground="#fde68a", font=("Segoe UI", 9), lmargin1=10, lmargin2=10)
 
-        self.status_var = tk.StringVar(value="Ready.")
+        self.chat_text.tag_configure("badge_system", foreground="#a78bfa", font=("Segoe UI", 9, "bold"), lmargin1=10, lmargin2=10)
+        self.chat_text.tag_configure("text_system", foreground="#94a3b8", font=("Segoe UI", 9), lmargin1=10, lmargin2=10)
+
+        self.chat_text.tag_configure("divider", foreground="#1e2438", font=("Segoe UI", 6))
+
+        # Initial Welcome Message Card
+        self.append_message(
+            "System",
+            "✨ DISHA is ready. Speak via 🎤 Listen, press Ctrl+Alt+V, or type below. Say 'bye' to exit."
+        )
+
+        # ── Quick Action Chips Ribbon ─────────────────────────────────────────
+        chips_frame = tk.Frame(main_container, bg="#0d0f17")
+        chips_frame.pack(fill="x", padx=12, pady=(0, 4))
+
+        quick_actions = [
+            ("🕒 Time", "what time is it"),
+            ("🔋 Battery", "battery status"),
+            ("💾 RAM", "how much ram is used"),
+            ("📋 Clipboard", "what did i copy"),
+            ("📸 Vision", "what's on my screen"),
+            ("⏰ Reminders", "show my reminders"),
+        ]
+
+        for label, cmd in quick_actions:
+            chip = tk.Button(
+                chips_frame,
+                text=label,
+                bg="#161a29",
+                fg="#94a3b8",
+                activebackground="#20273d",
+                activeforeground="#00d2ff",
+                font=("Segoe UI", 8, "bold"),
+                bd=0,
+                padx=8,
+                pady=3,
+                cursor="hand2",
+                command=lambda c=cmd: self.quick_submit(c),
+            )
+            chip.pack(side="left", padx=(0, 6))
+            chip.bind("<Enter>", lambda e, b=chip: b.configure(bg="#1f253a", fg="#00d2ff"))
+            chip.bind("<Leave>", lambda e, b=chip: b.configure(bg="#161a29", fg="#94a3b8"))
+
+        # ── Status Bar & Hearing Indicator ────────────────────────────────────
+        status_frame = tk.Frame(main_container, bg="#0d0f17")
+        status_frame.pack(fill="x", padx=14, pady=(2, 6))
+
+        self.status_var = tk.StringVar(value="Standby. Ready for query or voice command.")
         self.status_lbl = tk.Label(
             status_frame,
             textvariable=self.status_var,
-            bg="#1e1e2e",
-            fg="#a6adc8",
-            font=("Segoe UI", 9),
+            bg="#0d0f17",
+            fg="#64748b",
+            font=("Segoe UI", 8),
             anchor="w",
         )
         self.status_lbl.pack(fill="x")
 
-        # Input Frame (Entry + Send + Listen)
-        input_frame = tk.Frame(self.win, bg="#1e1e2e")
-        input_frame.pack(fill="x", side="bottom", padx=14, pady=(0, 14))
+        # ── Input Dock Container ──────────────────────────────────────────────
+        dock_outer = tk.Frame(main_container, bg="#1a2034", padx=1, pady=1)
+        dock_outer.pack(fill="x", side="bottom", padx=12, pady=(0, 12))
 
+        dock_inner = tk.Frame(dock_outer, bg="#131622", padx=6, pady=6)
+        dock_inner.pack(fill="x")
+
+        # Modern Entry Field
+        self.placeholder_text = "Ask DISHA anything or click 🎙️..."
         self.entry = tk.Entry(
-            input_frame,
-            bg="#313244",
-            fg="#cdd6f4",
-            insertbackground="#cdd6f4",
-            font=("Segoe UI", 11),
-            bd=1,
-            relief="solid",
+            dock_inner,
+            bg="#181c2b",
+            fg="#64748b",
+            insertbackground="#00d2ff",
+            font=("Segoe UI", 10),
+            bd=0,
+            relief="flat",
         )
-        self.entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        self.entry.insert(0, self.placeholder_text)
+        self.entry.pack(side="left", fill="x", expand=True, padx=(4, 8), ipady=5)
+
+        self.entry.bind("<FocusIn>", self._on_entry_focus_in)
+        self.entry.bind("<FocusOut>", self._on_entry_focus_out)
         self.entry.bind("<Return>", lambda e: self.submit_text())
 
-        send_btn = tk.Button(
-            input_frame,
-            text="Send",
-            bg="#89b4fa",
-            fg="#11111b",
-            font=("Segoe UI", 10, "bold"),
-            bd=0,
-            padx=12,
-            pady=4,
-            cursor="hand2",
-            command=self.submit_text,
-        )
-        send_btn.pack(side="left", padx=(0, 6))
-
-        speak_btn = tk.Button(
-            input_frame,
-            text="🎤 Listen",
-            bg="#a6e3a1",
-            fg="#11111b",
-            font=("Segoe UI", 10, "bold"),
+        # Glowing Mic Button
+        self.mic_btn = tk.Button(
+            dock_inner,
+            text="🎙️ Listen",
+            bg="#0ea5e9",
+            fg="#ffffff",
+            activebackground="#0284c7",
+            font=("Segoe UI", 9, "bold"),
             bd=0,
             padx=12,
             pady=4,
             cursor="hand2",
             command=self.start_listening,
         )
-        speak_btn.pack(side="left")
+        self.mic_btn.pack(side="left", padx=(0, 6))
+
+        # Send Button
+        send_btn = tk.Button(
+            dock_inner,
+            text="➤ Send",
+            bg="#2563eb",
+            fg="#ffffff",
+            activebackground="#1d4ed8",
+            font=("Segoe UI", 9, "bold"),
+            bd=0,
+            padx=12,
+            pady=4,
+            cursor="hand2",
+            command=self.submit_text,
+        )
+        send_btn.pack(side="left")
+
+    def _draw_visualizer(self, active: bool = False):
+        self.vis_canvas.delete("all")
+        w = self.vis_canvas.winfo_width() or 550
+        if not active:
+            self.vis_canvas.create_line(0, 2, w, 2, fill="#1e2438", width=2)
+            self.vis_canvas.create_line(w // 2 - 40, 2, w // 2 + 40, 2, fill="#00d2ff", width=2)
+        else:
+            colors = ["#00d2ff", "#38bdf8", "#818cf8", "#a855f7", "#ec4899", "#38bdf8", "#00d2ff"]
+            seg = w / len(colors)
+            for i, col in enumerate(colors):
+                h = 1 + (i % 3) * 1.5
+                self.vis_canvas.create_line(i * seg, 2, (i + 1) * seg, 2, fill=col, width=int(h) + 1)
+
+    def _on_entry_focus_in(self, event):
+        if self.entry.get() == self.placeholder_text:
+            self.entry.delete(0, tk.END)
+            self.entry.configure(fg="#f8fafc")
+
+    def _on_entry_focus_out(self, event):
+        if not self.entry.get().strip():
+            self.entry.insert(0, self.placeholder_text)
+            self.entry.configure(fg="#64748b")
 
     def _start_drag(self, event):
         self._drag_data["x"] = event.x
@@ -276,13 +458,24 @@ class DishaAssistantWindow:
         self.win.geometry(f"+{x}+{y}")
 
     def append_message(self, role: str, text: str):
-        """Append formatted line [HH:MM] Role: text to scrollable history."""
+        """Append formatted card bubble into chat history."""
         self.chat_text.configure(state=tk.NORMAL)
         timestamp = datetime.now().strftime("%I:%M %p")
-        self.chat_text.insert(tk.END, f"[{timestamp}] ", "time")
-        tag_role = "role_disha" if role == "DISHA" else ("role_you" if role == "You" else "role_system")
-        self.chat_text.insert(tk.END, f"{role}: ", tag_role)
-        self.chat_text.insert(tk.END, f"{text}\n\n", "msg_text")
+
+        if role == "You":
+            self.chat_text.insert(tk.END, f"👤 You  •  {timestamp}\n", "badge_user")
+            self.chat_text.insert(tk.END, f"{text}\n\n", "text_user")
+        elif role == "DISHA":
+            self.chat_text.insert(tk.END, f"✨ DISHA  •  {timestamp}\n", "badge_disha")
+            self.chat_text.insert(tk.END, f"{text}\n\n", "text_disha")
+        elif "Reminder" in role or "Timer" in text:
+            self.chat_text.insert(tk.END, f"🔔 REMINDER  •  {timestamp}\n", "badge_reminder")
+            self.chat_text.insert(tk.END, f"{text}\n\n", "text_reminder")
+        else:
+            self.chat_text.insert(tk.END, f"ℹ️ System  •  {timestamp}\n", "badge_system")
+            self.chat_text.insert(tk.END, f"{text}\n\n", "text_system")
+
+        self.chat_text.insert(tk.END, "─" * 46 + "\n\n", "divider")
         self.chat_text.configure(state=tk.DISABLED)
         self.chat_text.see(tk.END)
 
@@ -291,35 +484,59 @@ class DishaAssistantWindow:
         self.chat_text.configure(state=tk.NORMAL)
         if self._current_stream_mark is None:
             timestamp = datetime.now().strftime("%I:%M %p")
-            self.chat_text.insert(tk.END, f"[{timestamp}] ", "time")
-            self.chat_text.insert(tk.END, "DISHA: ", "role_disha")
+            self.chat_text.insert(tk.END, f"✨ DISHA  •  {timestamp}\n", "badge_disha")
             self._current_stream_mark = self.chat_text.index(f"{tk.END}-1c")
-            self.chat_text.insert(tk.END, f"{accumulated_text}\n\n", "msg_text")
+            self.chat_text.insert(tk.END, f"{accumulated_text}\n\n", "text_disha")
         else:
             self.chat_text.delete(self._current_stream_mark, tk.END)
-            self.chat_text.insert(tk.END, f"{accumulated_text}\n\n", "msg_text")
+            self.chat_text.insert(tk.END, f"{accumulated_text}\n\n", "text_disha")
         self.chat_text.configure(state=tk.DISABLED)
         self.chat_text.see(tk.END)
 
     def finish_streaming(self):
-        """Reset streaming marker when response finishes."""
+        """Reset streaming marker and insert divider."""
+        if self._current_stream_mark is not None:
+            self.chat_text.configure(state=tk.NORMAL)
+            self.chat_text.insert(tk.END, "─" * 46 + "\n\n", "divider")
+            self.chat_text.configure(state=tk.DISABLED)
+            self.chat_text.see(tk.END)
         self._current_stream_mark = None
 
+    def clear_chat(self):
+        """Wipe conversation history and show clean welcome banner."""
+        self.chat_text.configure(state=tk.NORMAL)
+        self.chat_text.delete("1.0", tk.END)
+        self.chat_text.configure(state=tk.DISABLED)
+        self.append_message("System", "Chat history cleared. How can I help you?")
+
     def set_status(self, text: str):
-        """Update status label."""
         self.status_var.set(text)
 
     def set_listening_indicator(self, active: bool):
-        """Toggle visual listening indicator."""
         if active:
-            self.indicator_dot.configure(text="● LISTENING", fg="#f38ba8")
+            self.status_pill.configure(text=" ● LISTENING... ", bg="#881337", fg="#fb7185")
+            self.mic_btn.configure(text="🔴 Listening...", bg="#f43f5e")
+            self._draw_visualizer(active=True)
         else:
-            self.indicator_dot.configure(text="● IDLE", fg="#585b70")
+            self.status_pill.configure(text=" ● READY ", bg="#064e3b", fg="#34d399")
+            self.mic_btn.configure(text="🎙️ Listen", bg="#0ea5e9")
+            self._draw_visualizer(active=False)
 
     def focus_text_input(self):
         self.win.deiconify()
         self.win.attributes("-topmost", True)
         self.entry.focus_set()
+        if self.entry.get() == self.placeholder_text:
+            self.entry.delete(0, tk.END)
+            self.entry.configure(fg="#f8fafc")
+
+    def quick_submit(self, query: str):
+        self.win.deiconify()
+        self.win.attributes("-topmost", True)
+        self.entry.delete(0, tk.END)
+        self.entry.insert(0, query)
+        self.entry.configure(fg="#f8fafc")
+        self.submit_text()
 
     def start_listening(self):
         if voice.is_listening():
@@ -327,7 +544,7 @@ class DishaAssistantWindow:
         self.win.deiconify()
         self.win.attributes("-topmost", True)
         self.set_listening_indicator(True)
-        self.set_status("🎤 Listening...")
+        self.set_status("🎤 Listening for speech...")
 
         def on_partial(text):
             self.root.after(0, lambda: self.set_status(f"🎤 Hearing: {text}"))
@@ -345,7 +562,7 @@ class DishaAssistantWindow:
             self.root.after(0, lambda: self.set_listening_indicator(False))
 
             if not heard:
-                self.root.after(0, lambda: self.set_status("Didn't catch anything. Click 🎤 Listen or type below."))
+                self.root.after(0, lambda: self.set_status("Didn't catch that. Click 🎙️ Listen or type above."))
                 return
 
             if is_exit_command(heard):
@@ -382,7 +599,7 @@ class DishaAssistantWindow:
 
     def submit_text(self):
         query = self.entry.get().strip()
-        if not query:
+        if not query or query == self.placeholder_text:
             return
         self.entry.delete(0, tk.END)
 
@@ -395,6 +612,7 @@ class DishaAssistantWindow:
             return
 
         self.append_message("You", query)
+        self.status_pill.configure(text=" ● THINKING... ", bg="#3b0764", fg="#c084fc")
         self.set_status("Thinking...")
 
         def worker():
@@ -410,7 +628,10 @@ class DishaAssistantWindow:
             else:
                 self.root.after(0, self.finish_streaming)
 
-            self.root.after(0, lambda: self.set_status("Ready."))
+            self.root.after(0, lambda: (
+                self.set_listening_indicator(False),
+                self.set_status("Ready.")
+            ))
             voice.speak(answer, wait=False)
 
         threading.Thread(target=worker, daemon=True).start()
@@ -439,13 +660,14 @@ def open_or_focus_assistant(root, mode: str = "voice"):
 
 
 # ---------------------------------------------------------------------------
-# Floating Desktop Logo Widget
+# Floating Desktop Logo Widget (Luxury Floating Avatar)
 # ---------------------------------------------------------------------------
 
 class DesktopLogoWidget:
     """
-    A sleek, draggable floating desktop avatar logo widget.
-    Sits gracefully on your desktop. Click to open DISHA!
+    Sleek, futuristic floating desktop emblem widget.
+    Renders the high-res DISHA compass & soundwave emblem with a glowing neon ring.
+    Draggable anywhere on screen. Click to speak!
     """
 
     def __init__(self, root):
@@ -453,22 +675,22 @@ class DesktopLogoWidget:
         self.win = tk.Toplevel(root)
         self.win.overrideredirect(True)
         self.win.attributes("-topmost", True)
-        self.win.configure(bg="#11111b")
+        self.win.configure(bg="#0c0e17")
 
-        # Make background transparent if supported
         try:
-            self.win.attributes("-transparentcolor", "#11111b")
+            self.win.attributes("-transparentcolor", "#0c0e17")
         except Exception:
             pass
 
-        self.size = 56
+        self.size = 64
         sw = self.win.winfo_screenwidth()
         sh = self.win.winfo_screenheight()
-        self.win.geometry(f"{self.size}x{self.size}+{sw - 100}+{sh - 180}")
+        self.win.geometry(f"{self.size}x{self.size}+{sw - 110}+{sh - 190}")
 
         self._drag_x = 0
         self._drag_y = 0
         self._moved = False
+        self._tooltip = None
 
         self._build_widget()
 
@@ -477,30 +699,82 @@ class DesktopLogoWidget:
             self.win,
             width=self.size,
             height=self.size,
-            bg="#11111b",
+            bg="#0c0e17",
             highlightthickness=0,
             cursor="hand2",
         )
         self.canvas.pack(fill="both", expand=True)
 
-        pad = 4
-        self.canvas.create_oval(
-            pad, pad, self.size - pad, self.size - pad,
-            fill="#a6e3a1", outline="#89b4fa", width=2
-        )
-        self.canvas.create_text(
-            self.size // 2, self.size // 2,
-            text="D", fill="#11111b", font=("Segoe UI", 16, "bold")
+        # Load circular masked high-res logo
+        self.avatar_img = _load_circle_icon((56, 56))
+        if self.avatar_img:
+            self.canvas.create_image(self.size // 2, self.size // 2, image=self.avatar_img)
+        else:
+            pad = 6
+            self.canvas.create_oval(
+                pad, pad, self.size - pad, self.size - pad,
+                fill="#0ea5e9", outline="#00d2ff", width=2
+            )
+            self.canvas.create_text(
+                self.size // 2, self.size // 2,
+                text="✦", fill="#ffffff", font=("Segoe UI", 18, "bold")
+            )
+
+        # Glowing Neon Ring Border
+        self.ring = self.canvas.create_oval(
+            3, 3, self.size - 3, self.size - 3,
+            outline="#00d2ff", width=2
         )
 
         self.canvas.bind("<ButtonPress-1>", self._on_press)
         self.canvas.bind("<B1-Motion>", self._on_drag)
         self.canvas.bind("<ButtonRelease-1>", self._on_release)
+        self.canvas.bind("<Enter>", self._on_enter)
+        self.canvas.bind("<Leave>", self._on_leave)
+
+    def _on_enter(self, event):
+        self.canvas.itemconfig(self.ring, outline="#38bdf8", width=3)
+        self._show_tooltip()
+
+    def _on_leave(self, event):
+        self.canvas.itemconfig(self.ring, outline="#00d2ff", width=2)
+        self._hide_tooltip()
+
+    def _show_tooltip(self):
+        if self._tooltip is not None:
+            return
+        x = self.win.winfo_x() - 40
+        y = self.win.winfo_y() - 32
+        self._tooltip = tk.Toplevel(self.win)
+        self._tooltip.overrideredirect(True)
+        self._tooltip.attributes("-topmost", True)
+        self._tooltip.configure(bg="#1e2438", padx=1, pady=1)
+        self._tooltip.geometry(f"+{max(10, x)}+{max(10, y)}")
+
+        lbl = tk.Label(
+            self._tooltip,
+            text="DISHA • Click to Speak",
+            bg="#101422",
+            fg="#00d2ff",
+            font=("Segoe UI", 8, "bold"),
+            padx=8,
+            pady=3,
+        )
+        lbl.pack()
+
+    def _hide_tooltip(self):
+        if self._tooltip is not None:
+            try:
+                self._tooltip.destroy()
+            except Exception:
+                pass
+            self._tooltip = None
 
     def _on_press(self, event):
         self._drag_x = event.x
         self._drag_y = event.y
         self._moved = False
+        self._hide_tooltip()
 
     def _on_drag(self, event):
         dx = event.x - self._drag_x
@@ -522,11 +796,13 @@ class DesktopLogoWidget:
 
 def make_icon_image():
     if ICON_PATH.exists():
-        return Image.open(ICON_PATH)
-    img = Image.new("RGB", (64, 64), "#1e1e2e")
+        try:
+            return Image.open(ICON_PATH).resize((64, 64), Image.Resampling.LANCZOS)
+        except Exception:
+            pass
+    img = Image.new("RGBA", (64, 64), (12, 14, 23, 255))
     draw = ImageDraw.Draw(img)
-    draw.ellipse((8, 8, 56, 56), fill="#a6e3a1")
-    draw.text((24, 22), "D", fill="#1e1e2e")
+    draw.ellipse((4, 4, 60, 60), fill="#00d2ff", outline="#8b5cf6", width=2)
     return img
 
 

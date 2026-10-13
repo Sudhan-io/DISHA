@@ -672,7 +672,8 @@ class DishaAssistantWindow:
         self.set_status("🎤 Listening for speech...")
 
         def on_partial(text):
-            self.root.after(0, lambda: self.set_status(f"🎤 Hearing: {text}"))
+            if text:
+                self.root.after(0, lambda t=text: self.set_status(f"🎤 Hearing: {t}"))
 
         def worker():
             try:
@@ -804,31 +805,38 @@ class DishaAssistantWindow:
             fg="#fdf4ff",
         )
         self.status_pill.configure(
-            text=" ● LIVE VOICE ",
+            text=" ● LIVE VOICE: LISTENING ",
             bg="#701a75",
             fg="#f472b6",
         )
+        self.mic_btn.configure(text="🔴 Listening...", bg="#f43f5e")
+        self._draw_visualizer(active=True)
+        self.set_status("🎤 Live Voice active — listening...")
         self.append_message("System", "🎙️ Continuous Voice Mode started. Speak naturally, or say 'exit voice mode' to stop.")
         voice.speak("Voice mode started. I'm listening.", wait=False)
 
         def _voice_loop():
             while self._voice_mode_active:
-                self.root.after(0, lambda: self.set_listening_indicator(True))
-                self.root.after(0, lambda: self.set_status("🎤 Listening for speech..."))
+                self.root.after(0, lambda: (
+                    self.status_pill.configure(text=" ● LIVE VOICE: LISTENING ", bg="#701a75", fg="#f472b6"),
+                    self.set_status("🎤 Listening... speak anytime."),
+                    self.mic_btn.configure(text="🔴 Listening...", bg="#f43f5e"),
+                    self._draw_visualizer(active=True)
+                ))
 
                 def on_partial(text):
-                    if self._voice_mode_active:
-                        self.root.after(0, lambda: self.set_status(f"🎤 Hearing: {text}"))
+                    if self._voice_mode_active and text:
+                        self.root.after(0, lambda t=text: self.set_status(f"🎤 Hearing: {t}"))
 
                 try:
                     heard = voice.listen(on_partial=on_partial)
                 except Exception:
                     break
 
-                self.root.after(0, lambda: self.set_listening_indicator(False))
                 if not self._voice_mode_active:
                     break
 
+                # If no speech was detected in this cycle, stay smoothly in listening state without flickering
                 if not heard:
                     continue
 
@@ -860,7 +868,7 @@ class DishaAssistantWindow:
                     self.root.after(0, self.finish_streaming)
 
                 self.root.after(0, lambda: (
-                    self.status_pill.configure(text=" ● LIVE VOICE ", bg="#701a75", fg="#f472b6"),
+                    self.status_pill.configure(text=" ● LIVE VOICE: SPEAKING ", bg="#86198f", fg="#fdf4ff"),
                     self.set_status("Speaking reply...")
                 ))
                 # Crucial: wait=True ensures DISHA finishes speaking before listening again!

@@ -371,10 +371,7 @@ def listen(sample_rate: int = 16000, max_seconds: float = None, on_partial=None)
                     else:
                         pre_roll.append(data)
 
-                    if DEBUG and int(now * 10) % 5 == 0:
-                        _dbg(f"rms={level:6.0f} thr={threshold:6.0f} floor={_noise_floor:6.0f} speech={is_speech}")
-
-                    # Always feed Vosk for real-time partial feedback
+                    # Real-time partial feedback
                     if recognizer.AcceptWaveform(data):
                         text = _clean_result(json.loads(recognizer.Result()))
                         if text and started:
@@ -382,11 +379,9 @@ def listen(sample_rate: int = 16000, max_seconds: float = None, on_partial=None)
                             if on_partial:
                                 on_partial(" ".join(parts))
                     elif started and on_partial:
-                        p = json.loads(recognizer.PartialResult()).get("partial", "")
+                        p = json.loads(recognizer.PartialResult()).get("partial", "").strip()
                         if p:
                             on_partial(" ".join(parts + [p]).strip())
-                        elif use_whisper:
-                            on_partial("🎤 Listening...")
 
                     # Stop once you were speaking and have been quiet long enough
                     if started and last_speech_t and (now - last_speech_t) >= SILENCE_STOP_SECONDS:

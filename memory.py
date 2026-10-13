@@ -146,6 +146,11 @@ def extract_and_store_facts(text: str) -> None:
                 if any(w.lower() in COMMON_NON_NAMES for w in words) or len(raw_val) < 2:
                     continue
                 value = raw_val.title()
+                try:
+                    import config
+                    config.USER_NAME = value
+                except Exception:
+                    pass
             else:
                 value = raw_val
             save_fact(key, value)

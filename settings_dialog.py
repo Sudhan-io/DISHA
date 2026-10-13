@@ -402,6 +402,18 @@ class DishaSettingsDialog:
         gemini_client.GEMINI_MODEL = selected
         gemini_client._model = None
         update_env_file("GEMINI_MODEL", selected)
+        if selected == "local-ollama":
+            import local_llm
+            if not local_llm.is_ollama_running():
+                self.key_status_lbl.configure(
+                    text="⚠️ Note: Ollama is not running on localhost:11434.",
+                    fg="#f59e0b"
+                )
+            else:
+                self.key_status_lbl.configure(
+                    text="✓ Ollama is active & ready for offline inference.",
+                    fg="#34d399"
+                )
 
     def _on_tts_toggle(self):
         val = self.tts_enabled_var.get()

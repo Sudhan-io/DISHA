@@ -233,8 +233,41 @@ def _ans_thanks(m, text: str) -> str:
     return "Anytime."
 
 
+def _ans_set_name(m, text: str) -> str:
+    """Acknowledge when user states their name, persist to memory, and update runtime."""
+    try:
+        import memory
+        import config
+        start, end = m.span(1)
+        raw_name = text[start:end].strip().rstrip(".,!?")
+        words = raw_name.split()
+        if any(w.lower() in getattr(memory, "COMMON_NON_NAMES", set()) for w in words) or len(raw_name) < 2:
+            return "Hello! What can I help you with today?"
+        name = raw_name.title()
+        memory.save_fact("user_name", name)
+        config.USER_NAME = name
+        return f"Nice to meet you, {name}! I've saved your name."
+    except Exception:
+        return "Got it! I've saved your name."
+
+
+def _ans_get_name(m, text: str) -> str:
+    """Report the user's name from memory facts or config."""
+    try:
+        import memory
+        import config
+        name = memory.get_fact("user_name", "") or getattr(config, "USER_NAME", "")
+        if name and name.lower() not in ("user", "developer"):
+            return f"Your name is {name}."
+        return "I don't know your name yet. You can tell me by saying 'my name is [your name]'."
+    except Exception:
+        return "I don't know your name yet."
+
+
 # Internal pattern table
 _PATTERNS: list[tuple[str, Callable]] = [
+    (r"(?:my name is|call me|you can call me|i am called)\s+([A-Za-z]+(?:\s+[A-Za-z]+)?)", _ans_set_name),
+    (r"\b(?:what is|what's|do you know)\s+(?:my|my own)\s+name\b|\bwho am i\b", _ans_get_name),
     (r"\btime\b|\bwhat time\b|\bcurrent time\b", _ans_time),
     (r"\bdate\b|\btoday\b|\bwhat day\b|\bday today\b", _ans_date),
     (r"\bbattery\b|\bcharge\b", _ans_battery),

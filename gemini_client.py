@@ -36,8 +36,11 @@ def _build_system_prompt() -> str:
 def _get_model():
     key = _get_api_key()
     genai.configure(api_key=key)
+    model_name = _get_model_name()
+    if model_name == "local-ollama" or model_name.startswith("local-"):
+        model_name = "gemini-3.5-flash-lite"
     return genai.GenerativeModel(
-        model_name=_get_model_name(),
+        model_name=model_name,
         system_instruction=_build_system_prompt(),
     )
 
@@ -86,8 +89,18 @@ def _sanitize_error(e: Exception) -> str:
 def ask(prompt: str, context: str = "") -> str:
     """
     Send a prompt to Gemini and return DISHA's reply as plain text.
-    When offline, seamlessly routes to local_llm (Ollama).
+    When offline or when local-ollama is selected, seamlessly routes to local_llm (Ollama).
     """
+    model_name = _get_model_name()
+    if model_name == "local-ollama" or model_name.startswith("local-"):
+        import local_llm
+        if local_llm.is_ollama_running():
+            return local_llm.ask_local(prompt, context)
+        return (
+            "🛡️ Local Ollama is selected as your primary engine, but the Ollama service is not running on http://127.0.0.1:11434.\n\n"
+            "Please start Ollama on your PC, or open Settings (⚙️) to switch to Gemini 3.5 Flash Lite."
+        )
+
     if not is_online():
         import local_llm
         if local_llm.is_ollama_running():
@@ -116,11 +129,23 @@ def ask(prompt: str, context: str = "") -> str:
 def ask_streaming(prompt: str, context: str = "", on_chunk: Optional[Callable[[str], None]] = None) -> str:
     """
     Like ask(), but calls on_chunk(partial_accumulated_text) as tokens arrive.
-    When offline, streams from local_llm (Ollama).
+    When offline or when local-ollama is selected, streams from local_llm (Ollama).
     Falls back to non-streaming ask() if on_chunk is None.
     """
     if on_chunk is None:
         return ask(prompt, context)
+
+    model_name = _get_model_name()
+    if model_name == "local-ollama" or model_name.startswith("local-"):
+        import local_llm
+        if local_llm.is_ollama_running():
+            return local_llm.ask_local_streaming(prompt, context, on_chunk=on_chunk)
+        msg = (
+            "🛡️ Local Ollama is selected as your primary engine, but the Ollama service is not running on http://127.0.0.1:11434.\n\n"
+            "Please start Ollama on your PC, or open Settings (⚙️) to switch to Gemini 3.5 Flash Lite."
+        )
+        on_chunk(msg)
+        return msg
 
     if not is_online():
         import local_llm

@@ -1,151 +1,187 @@
-# DISHA — Personal Desktop Companion (v1)
+# 🌟 DISHA — Desktop Intelligent System for Hybrid Assistance
 
-A lightweight, event-driven desktop assistant. Sits quietly in your system
-tray, wakes on a hotkey, and answers using the Gemini API. No local model,
-no background polling — idles at near-zero CPU/RAM until you call on it.
+> **D.I.S.H.A.** — **D**esktop **I**ntelligent **S**ystem for **H**ybrid **A**ssistance  
+> *In Sanskrit, **Disha** (दिशा) signifies **"Direction"** or **"Guiding Path"** — a lightweight, hybrid personal companion designed to navigate desktop workflows with zero friction across online, offline, and portable states.*
 
-## What v1 does
+> **"DISHA must always respond usefully — by voice or text, online or offline, on the laptop or from a USB drive — without hanging, crashing, or going silent."**
 
-- Greets you once when your laptop starts up — both a popup and spoken
-  aloud, fully offline.
-- Lives as a tray icon — click it, or press **Ctrl+Alt+D**, to type a
-  question. Press **Ctrl+Alt+V** to talk to her instead (offline speech
-  recognition, no internet needed).
-- Understands local commands like "open vscode" or "open chrome" entirely
-  offline — these never touch Gemini or the internet, so they work even
-  with no connection and respond instantly.
-- Anything that isn't a recognized local command falls through to Gemini
-  for a real answer (this part does need internet).
-- Speaks her responses aloud using your Windows' built-in offline voice
-  engine — no internet needed for this either.
-- Keeps a simple rolling log of your last ~20 exchanges so it has light
-  context ("what did I ask earlier") — not full memory, just recent history.
-- Fails gracefully if you're offline instead of freezing or crashing.
-- Auto-launches silently every time you log into Windows — you never run
-  `python main.py` manually after the initial setup.
+**DISHA** is an event-driven, multi-tier personal virtual assistant designed for Windows 11. It idles silently in the system tray and wakes instantly via global hotkeys, floating desktop widget, or hands-free wake word.
 
-## What it deliberately does NOT do yet
+---
 
-No local reasoning model (Gemini handles that), no screen understanding.
-Voice and offline app-launching are in — reasoning and screen awareness
-are the next layers to add later.
+## ⚡ Key Highlights & Architecture
 
-## Setup (Windows 11)
+- **Multi-Tier Hybrid Brain:**
+  1. **Tier 1 (Instant Local Commands <1ms):** Controls Windows system features (volume, mute, sleep, lock, screenshot, clipboard reading, special folders) and opens any of 139+ Start Menu applications via fuzzy matching.
+  2. **Tier 2 (Scheduler & Reminders <2ms):** Parses natural language timers and persistent reminders (`"remind me in 15 minutes to take a break"`).
+  3. **Tier 3 (Deterministic Offline Brain <5ms):** Instantly answers system questions (battery %, charging state, RAM usage, CPU load, date, time, math expressions).
+  4. **Tier 4 (Online AI — Gemini 2.5 Flash):** High-speed streaming AI with contextual personalization from your saved facts.
+  5. **Tier 5 (Offline Local LLM — Meta Llama 3.2 3B):** Automatic failover when offline. Runs locally via Ollama with NVIDIA GPU acceleration and automatic memory release when idle.
+- **Accurate Speech-to-Text (`faster-whisper`):**
+  Uses CTranslate2 INT8 quantization on 6 CPU threads (~500ms latency) with full punctuation and capitalization. Vosk provides background wake word detection (`"hey disha"`) and live partials.
+- **Windows SAPI5 Voice Output:**
+  Clean, reliable text-to-speech with collision prevention (never listens while speaking).
+- **Portable USB Mode:**
+  Runs self-contained from any USB drive via `DISHA_Launcher.bat`. Enforces a 6-character hardware PIN guard with a 30-second lockout timer.
+- **Mobile Remote Web Access:**
+  Built-in Flask server on your local LAN with a mobile-optimized dark-mode chat UI and Bearer token security. Access DISHA from your phone on the same Wi-Fi.
 
-1. **Install Python 3.10+** if you don't have it: https://python.org
+---
 
-2. **Open a terminal in this folder** and create a virtual environment:
-   ```
-   python -m venv venv
-   venv\Scripts\activate
-   ```
+## 🏗️ System Architecture
 
-3. **Install dependencies:**
-   ```
-   pip install -r requirements.txt
-   ```
-
-4. **Get a Gemini API key:**
-   Go to https://aistudio.google.com/apikey, create a key.
-
-5. **Download the offline speech recognition model (Vosk):**
-   - Go to https://alphacephei.com/vosk/models
-   - Download **`vosk-model-small-en-us-0.15`** (~40MB — the small model is
-     the right pick for your hardware; the larger ones are more accurate
-     but noticeably heavier on CPU).
-   - Unzip it.
-   - Rename the unzipped folder to `model` and place it directly inside
-     this `disha` folder, so you end up with `disha\model\` containing
-     files like `am`, `conf`, `graph`, etc.
-
-6. **Set up your `.env` file:**
-   Copy `.env.example` to `.env` and paste your real API key in:
-   ```
-   copy .env.example .env
-   ```
-   Then edit `.env` and replace `your_api_key_here` with your actual key.
-
-7. **Run it manually first, to test:**
-   ```
-   python main.py
-   ```
-   You should hear and see a greeting, then a tray icon appear. Press
-   `Ctrl+Alt+D` to type a question, or `Ctrl+Alt+V` to speak one — try
-   saying "open notepad" to test the offline command routing.
-
-8. **Optional — run silently (no console window):**
-   Once it works, use `pythonw.exe` instead of `python.exe` so no terminal
-   window stays open:
-   ```
-   venv\Scripts\pythonw.exe main.py
-   ```
-
-## Auto-start on login (optional)
-
-Run `setup_startup.bat` once. It registers a Windows Task Scheduler entry
-that launches DISHA silently every time you log in — no console window,
-no manual start needed. To undo it later:
 ```
-schtasks /Delete /TN "DISHA_Assistant" /F
+User Input (Voice / Hotkey / Widget / Web)
+                  │
+                  ▼
+         main.py (Central Router)
+                  │
+  ┌───────────────┼───────────────┬─────────────────┐
+  │               │               │                 │
+  ▼               ▼               ▼                 ▼
+Tier 1          Tier 2          Tier 3            Tier 4 & 5
+app_launcher    scheduler       local_brain       AI Reasoning
+- 139+ Apps     - Timers        - Time / Date     - Online: Gemini 2.5 Flash
+- System Ctrl   - Reminders     - Battery / RAM   - Offline: Llama 3.2 3B
+- Clipboard     - reminders.json- Math (<5ms)       (Ollama GPU @ D:\Ollama)
 ```
 
-## Internet requirement
+---
 
-DISHA needs an internet connection to actually think — the reasoning
-happens via the Gemini API, not locally. If you're offline, she'll tell
-you clearly rather than hanging or crashing. Everything else (tray icon,
-hotkey, popup UI) still works offline.
+## 💻 Hardware Compatibility & Benchmarks
 
-## Customizing DISHA's personality
+DISHA is tuned and benchmarked on modern Windows 11 systems:
+- **Benchmark Platform:** Windows 11 Laptop · Intel Core i5 (8C/12T) · 16 GB RAM · NVIDIA GeForce RTX GPU.
+- **Speech Transcription:** ~500 ms on CPU (`faster-whisper base.en`).
+- **Offline Rule Answers:** < 0.2 ms (`local_brain.py`).
+- **Offline LLM Inference:** ~55–65 tokens/sec (`llama3.2:3b` on CUDA0).
+- **VRAM Footprint:** ~2.5 GB total in use; frees automatically after 5 minutes of inactivity.
 
-Edit `SYSTEM_PROMPT` in `config.py` — that's her entire personality
-definition in one place. Change tone, verbosity, whatever you want.
+---
 
-## Project structure
+## 🚀 Quick Start Guide
+
+### 1. Prerequisites
+- **Windows 10 or 11 (64-bit)**
+- **Python 3.10** (recommended inside a virtual environment `venv/`)
+- A **Gemini API Key** from [Google AI Studio](https://aistudio.google.com/apikey)
+
+### 2. Installation
+Clone the repository and install the dependencies:
+```powershell
+cd disha
+python -m venv venv
+venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+### 3. Speech Model Setup (Vosk)
+Ensure the Vosk wake word model is located at `model/`:
+```
+disha/
+└── model/
+    ├── am/final.mdl
+    ├── conf/
+    ├── graph/
+    └── ivector/
+```
+
+### 4. Local LLM Setup (Ollama on D: Drive)
+Ollama and its models are stored directly on the `D:` drive to preserve SSD capacity on `C:`:
+- **Ollama Binaries:** `D:\Ollama\ollama.exe`
+- **Model Storage:** `D:\Ollama\models`
+- **Environment Variable:** `OLLAMA_MODELS = D:\Ollama\models`
+- Model pulled: `llama3.2:3b` (2.0 GB).
+
+### 5. Configuration (`.env`)
+Copy `.env.example` to `.env` in the project root:
+```ini
+GEMINI_API_KEY=your_gemini_api_key_here
+GEMINI_MODEL=gemini-2.5-flash
+
+DISHA_HOTKEY=<ctrl>+<alt>+d
+DISHA_VOICE_HOTKEY=<ctrl>+<alt>+v
+DISHA_STT_ENGINE=whisper
+DISHA_WHISPER_MODEL=base.en
+
+DISHA_WAKE_WORD=false
+DISHA_WAKE_PHRASE=hey disha
+
+USER_NAME=YourName
+
+DISHA_WEB_ENABLED=false
+DISHA_WEB_HOST=0.0.0.0
+DISHA_WEB_PORT=5000
+DISHA_WEB_TOKEN=your_secure_bearer_token_here
+
+DISHA_USB_MODE=false
+DISHA_OLLAMA_MODEL=llama3.2:3b
+DISHA_OLLAMA_URL=http://localhost:11434/api/generate
+```
+
+---
+
+## 🎮 How to Use
+
+### Launching
+- **Console Mode (Testing):**
+  ```powershell
+  venv\Scripts\python.exe main.py
+  ```
+- **Silent Background Mode:**
+  ```powershell
+  venv\Scripts\pythonw.exe main.py
+  ```
+- **USB Portable Mode:**
+  Double-click `DISHA_Launcher.bat` from any drive letter.
+
+### Controls & Shortcuts
+| Action | Shortcut / Trigger |
+|---|---|
+| **Voice Query** | Press <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>V</kbd> |
+| **Text Overlay** | Press <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>D</kbd> |
+| **Floating Logo** | Left-click the draggable green **D** widget on your desktop |
+| **Tray Icon** | Right-click tray icon to open voice, text, or copy mobile URL |
+| **Dismiss Window** | Press <kbd>Esc</kbd> or say/type `"exit"`, `"bye"`, `"close"` |
+
+---
+
+## 📱 Mobile Remote Access
+
+When `DISHA_WEB_ENABLED=true`:
+1. DISHA starts a background daemon on port `5000`.
+2. Find your local IP in the system tray tooltip (e.g. `http://<your-local-ip>:5000` or `http://192.168.1.100:5000`).
+3. Open the URL in your phone's browser on the same Wi-Fi network.
+4. Enter your `DISHA_WEB_TOKEN` when prompted to unlock live querying and telemetry.
+
+---
+
+## 🗂️ Project Structure
 
 ```
 disha/
-├── main.py            # entry point: tray icon, hotkeys, popup UI
-├── gemini_client.py    # single abstraction for all Gemini API calls
-├── voice.py             # offline STT (Vosk) + offline TTS (pyttsx3)
-├── app_launcher.py      # offline local command routing (open/close apps)
-├── memory.py           # simple rolling log of recent exchanges
-├── config.py             # settings, personality prompt, app command map
-├── requirements.txt
-├── .env.example
-├── setup_startup.bat     # registers permanent auto-start on login
-├── model/                # Vosk offline speech model (you download this)
-└── assets/
-    └── icon.png          # optional — custom tray icon (falls back to a generated one)
+├── main.py              # Main Tkinter UI, system tray, hotkeys, and master router
+├── config.py            # Environment configuration loader
+├── voice.py             # faster-whisper STT, Vosk wake word, and SAPI5 TTS
+├── gemini_client.py     # Gemini 2.5 Flash streaming AI & screen awareness
+├── local_brain.py       # Offline deterministic answers (<5ms)
+├── local_llm.py         # Local offline LLM wrapper (Ollama + Llama 3.2 3B)
+├── app_launcher.py      # Dynamic 139+ app discovery & system controls
+├── memory.py            # Persistent fact store (facts.json) & rolling history
+├── scheduler.py         # Natural language timer and reminder engine
+├── usb_guard.py         # Hardware device PIN verification & security lockout
+├── web_interface.py     # Flask daemon server & mobile chat UI
+├── DISHA_Launcher.bat   # Portable USB launcher
+├── requirements.txt     # Pinned Python dependencies
+└── model/               # Vosk offline acoustic model
 ```
 
-## Customizing local commands
+---
 
-Edit `APP_COMMANDS` in `config.py` to add apps you actually use — say
-"open spotify" or "open figma" and add the matching entry. This routing
-is checked before Gemini, so it's instant and works fully offline.
+## 🛡️ Hard Architectural Rules
 
-## Why it's built this way
-
-- **Single Gemini abstraction (`gemini_client.ask()`)** — every other part
-  of the app calls this one function. When you later add local models,
-  tool-calling, or MCP servers, you swap what's inside this function
-  without touching the UI or memory code.
-- **No polling loops** — the app is 100% event-driven (hotkey press, tray
-  click). This is what keeps it from ever disturbing you or eating CPU
-  while idle.
-- **Memory kept boring on purpose** — a flat rolling log, not a vector
-  database. Upgrade this later only once you actually have enough usage
-  history that it matters.
-
-## Next steps (once you're ready to expand)
-
-- Swap the flat memory log for something structured once you're storing
-  meaningful facts, not just chat history.
-- Add a "morning context" tool that reads your recent git log to greet
-  you with what you were working on, not just a generic hello.
-- Add voice (STT/TTS) once the text flow feels solid and low-latency.
-- Once your RAM upgrade lands, consider a small local model for narrow
-  tasks (e.g. quick classification) to reduce reliance on the API for
-  trivial things.
->>>>>>> c5860dc (Initial commit: Disha voice assistant project)
+1. **Path Relativity:** Every file path is relative to `BASE_DIR`. Zero absolute paths exist.
+2. **Non-Blocking UI:** All I/O, AI calls, and audio operations run in daemon threads.
+3. **No Self-Hearing:** Microphone never opens while speech synthesizer is speaking.
+4. **Offline Resilience:** Every single command degrades gracefully when internet is unavailable.
+5. **Memory Economy:** Local models auto-unload from GPU VRAM after 5 minutes of idle time.

@@ -1,5 +1,65 @@
+# Environment, secrets, and private credentials
 .env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+*.pfx
+*.p12
+
+# Local user memory & state (PII safekeeping)
 memory_log.jsonl
+memory_log*.jsonl
+facts.json
+facts*.json
+reminders.json
+reminders*.json
+device_id.txt
+*.bak
+*.sqlite
+*.sqlite3
+*.db
+
+# Temporary screen/audio captures and media
+temp_screen.png
+screenshot_*.png
+temp_*.png
+temp_*.jpg
+assets/icon.png
+*.wav
+*.mp3
+*.ogg
+
+# Python runtime, distributions, and virtual environments
 venv/
+env/
+.venv/
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+
+# Local model weights and huggingface cache
+.cache/
+models/
+huggingface/
+
+# Temporary and test artifacts
+*.log
+*.tmp
+scratch/
+
+# OS and Editor configurations
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+.DS_Store
+*.swp
+*.swo
+*~

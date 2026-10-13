@@ -2,26 +2,37 @@
 DISHA - Desktop Companion (v2)
 Features:
 - Floating Desktop Logo Widget (draggable anywhere on screen)
-- Interactive Overlay Card (stays open after replying)
+- Interactive Overlay Card with Scrollable Chat History
 - Real-time Speech Transcription (shows live text as you speak)
+- Streaming AI Responses (real-time token updates in chat)
 - Voice Dismissal: Say or type "go", "exit", "bye", "close" to dismiss
+- Wake Word Detection: Hands-free trigger ("hey disha")
 - Dual Input Modes: Hotkey Ctrl+Alt+V (voice) / Ctrl+Alt+D (text) / Tray / Floating Widget click
+- Dynamic Start Menu App Discovery + Fuzzy Matching
+- Offline deterministic brain (time, date, battery, RAM, CPU, math, etc.)
+- Reminders & timers scheduling engine
 """
 
 import socket
 import sys
 import threading
 import tkinter as tk
+from datetime import datetime
+from typing import Optional, Callable
 
 import pystray
 from PIL import Image, ImageDraw
 from pynput import keyboard
 
-from config import APP_NAME, HOTKEY, VOICE_HOTKEY, ICON_PATH
+from config import APP_NAME, HOTKEY, VOICE_HOTKEY, ICON_PATH, WAKE_WORD_ENABLED, WEB_ENABLED, WEB_PORT
 import gemini_client
 import memory
 import app_launcher
+import local_brain
+import scheduler
 import voice
+import usb_guard
+import web_interface
 
 # ---------------------------------------------------------------------------
 # Single-instance guard
@@ -50,17 +61,37 @@ def is_exit_command(text: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Routing logic
+# Routing logic (Multi-tier: System/Apps -> Reminders -> Local Brain -> Gemini)
 # ---------------------------------------------------------------------------
 
-def route_request(user_input: str) -> str:
+def route_request(user_input: str, on_chunk: Optional[Callable[[str], None]] = None) -> str:
+    # 0. Extract and persist facts
+    memory.extract_and_store_facts(user_input)
+
+    # 1. Try local command (app open/close, system controls) — always offline
     local_response = app_launcher.try_local_command(user_input)
     if local_response is not None:
         memory.log_exchange(user_input, local_response)
         return local_response
 
+    # 2. Try scheduler commands (reminders, timers) — always offline
+    sched_response = scheduler.try_schedule_command(user_input)
+    if sched_response is not None:
+        memory.log_exchange(user_input, sched_response)
+        return sched_response
+
+    # 3. Try local brain (date, time, battery, math, wifi, ram) — always offline
+    brain_response = local_brain.try_answer(user_input)
+    if brain_response is not None:
+        memory.log_exchange(user_input, brain_response)
+        return brain_response
+
+    # 4. Gemini (online) with streaming or graceful offline message
     context = memory.get_recent_context()
-    answer = gemini_client.ask(user_input, context)
+    if on_chunk is not None:
+        answer = gemini_client.ask_streaming(user_input, context, on_chunk=on_chunk)
+    else:
+        answer = gemini_client.ask(user_input, context)
     memory.log_exchange(user_input, answer)
     return answer
 
@@ -92,16 +123,17 @@ class DishaAssistantWindow:
         self.win.overrideredirect(True)
         self.win.attributes("-topmost", True)
         self.win.configure(bg="#1e1e2e")
-        center_window(self.win, 500, 320)
+        center_window(self.win, 520, 480)
 
         # Allow dragging the window by header
         self._drag_data = {"x": 0, "y": 0}
+        self._current_stream_mark = None
 
         self._build_ui()
 
     def _build_ui(self):
         # Header / Title Bar
-        header = tk.Frame(self.win, bg="#181825", height=38)
+        header = tk.Frame(self.win, bg="#181825", height=40)
         header.pack(fill="x", side="top")
 
         title_lbl = tk.Label(
@@ -111,7 +143,17 @@ class DishaAssistantWindow:
             fg="#a6e3a1",
             font=("Segoe UI", 11, "bold"),
         )
-        title_lbl.pack(side="left", padx=14, pady=6)
+        title_lbl.pack(side="left", padx=14, pady=8)
+
+        # Visual indicator badge (idle/listening)
+        self.indicator_dot = tk.Label(
+            header,
+            text="● IDLE",
+            bg="#181825",
+            fg="#585b70",
+            font=("Segoe UI", 9, "bold"),
+        )
+        self.indicator_dot.pack(side="left", padx=4)
 
         close_btn = tk.Label(
             header,
@@ -129,29 +171,58 @@ class DishaAssistantWindow:
         title_lbl.bind("<Button-1>", self._start_drag)
         title_lbl.bind("<B1-Motion>", self._do_drag)
 
-        # Main Text Conversation Area
-        content = tk.Frame(self.win, bg="#1e1e2e")
-        content.pack(fill="both", expand=True, padx=16, pady=10)
+        # Scrollable Chat History Area
+        chat_frame = tk.Frame(self.win, bg="#181825")
+        chat_frame.pack(fill="both", expand=True, padx=14, pady=(10, 6))
 
-        self.status_var = tk.StringVar(value="Ready. Press 🎤 Speak, type below, or say 'go' to exit.")
-        self.display_label = tk.Label(
-            content,
-            textvariable=self.status_var,
-            bg="#313244",
+        scrollbar = tk.Scrollbar(chat_frame, bg="#313244", troughcolor="#181825", bd=0, relief="flat")
+        scrollbar.pack(side="right", fill="y")
+
+        self.chat_text = tk.Text(
+            chat_frame,
+            bg="#181825",
             fg="#cdd6f4",
-            font=("Segoe UI", 11),
-            wraplength=450,
-            justify="left",
-            anchor="nw",
-            bd=0,
+            insertbackground="#cdd6f4",
+            font=("Segoe UI", 10),
+            wrap="word",
             padx=12,
-            pady=12,
+            pady=10,
+            bd=0,
+            highlightthickness=0,
+            yscrollcommand=scrollbar.set,
+            state=tk.DISABLED,
         )
-        self.display_label.pack(fill="both", expand=True)
+        self.chat_text.pack(side="left", fill="both", expand=True)
+        scrollbar.config(command=self.chat_text.yview)
 
-        # Input Area (Text entry + Speak button)
+        # Configure style tags for chat roles
+        self.chat_text.tag_configure("time", foreground="#6c7086", font=("Segoe UI", 9))
+        self.chat_text.tag_configure("role_you", foreground="#89b4fa", font=("Segoe UI", 10, "bold"))
+        self.chat_text.tag_configure("role_disha", foreground="#a6e3a1", font=("Segoe UI", 10, "bold"))
+        self.chat_text.tag_configure("role_system", foreground="#fab387", font=("Segoe UI", 10, "bold"))
+        self.chat_text.tag_configure("msg_text", foreground="#cdd6f4", font=("Segoe UI", 10))
+
+        # Initial welcome message in chat
+        self.append_message("System", "Ready. Press 🎤 Listen, type below, or say 'bye' to exit.")
+
+        # Status Bar (shows real-time listening/thinking state)
+        status_frame = tk.Frame(self.win, bg="#1e1e2e")
+        status_frame.pack(fill="x", padx=14, pady=(0, 6))
+
+        self.status_var = tk.StringVar(value="Ready.")
+        self.status_lbl = tk.Label(
+            status_frame,
+            textvariable=self.status_var,
+            bg="#1e1e2e",
+            fg="#a6adc8",
+            font=("Segoe UI", 9),
+            anchor="w",
+        )
+        self.status_lbl.pack(fill="x")
+
+        # Input Frame (Entry + Send + Listen)
         input_frame = tk.Frame(self.win, bg="#1e1e2e")
-        input_frame.pack(fill="x", side="bottom", padx=16, pady=(0, 14))
+        input_frame.pack(fill="x", side="bottom", padx=14, pady=(0, 14))
 
         self.entry = tk.Entry(
             input_frame,
@@ -204,39 +275,107 @@ class DishaAssistantWindow:
         y = self.win.winfo_y() + deltay
         self.win.geometry(f"+{x}+{y}")
 
+    def append_message(self, role: str, text: str):
+        """Append formatted line [HH:MM] Role: text to scrollable history."""
+        self.chat_text.configure(state=tk.NORMAL)
+        timestamp = datetime.now().strftime("%I:%M %p")
+        self.chat_text.insert(tk.END, f"[{timestamp}] ", "time")
+        tag_role = "role_disha" if role == "DISHA" else ("role_you" if role == "You" else "role_system")
+        self.chat_text.insert(tk.END, f"{role}: ", tag_role)
+        self.chat_text.insert(tk.END, f"{text}\n\n", "msg_text")
+        self.chat_text.configure(state=tk.DISABLED)
+        self.chat_text.see(tk.END)
+
+    def append_streaming_chunk(self, accumulated_text: str):
+        """Stream response tokens into the chat widget in real time."""
+        self.chat_text.configure(state=tk.NORMAL)
+        if self._current_stream_mark is None:
+            timestamp = datetime.now().strftime("%I:%M %p")
+            self.chat_text.insert(tk.END, f"[{timestamp}] ", "time")
+            self.chat_text.insert(tk.END, "DISHA: ", "role_disha")
+            self._current_stream_mark = self.chat_text.index(f"{tk.END}-1c")
+            self.chat_text.insert(tk.END, f"{accumulated_text}\n\n", "msg_text")
+        else:
+            self.chat_text.delete(self._current_stream_mark, tk.END)
+            self.chat_text.insert(tk.END, f"{accumulated_text}\n\n", "msg_text")
+        self.chat_text.configure(state=tk.DISABLED)
+        self.chat_text.see(tk.END)
+
+    def finish_streaming(self):
+        """Reset streaming marker when response finishes."""
+        self._current_stream_mark = None
+
+    def set_status(self, text: str):
+        """Update status label."""
+        self.status_var.set(text)
+
+    def set_listening_indicator(self, active: bool):
+        """Toggle visual listening indicator."""
+        if active:
+            self.indicator_dot.configure(text="● LISTENING", fg="#f38ba8")
+        else:
+            self.indicator_dot.configure(text="● IDLE", fg="#585b70")
+
     def focus_text_input(self):
         self.win.deiconify()
         self.win.attributes("-topmost", True)
         self.entry.focus_set()
 
     def start_listening(self):
+        if voice.is_listening():
+            return
         self.win.deiconify()
         self.win.attributes("-topmost", True)
-        self.status_var.set("🎤 Listening... Speak now.")
+        self.set_listening_indicator(True)
+        self.set_status("🎤 Listening...")
 
         def on_partial(text):
-            self.root.after(0, lambda: self.status_var.set(f"🎤 Hearing: {text}"))
+            self.root.after(0, lambda: self.set_status(f"🎤 Hearing: {text}"))
 
         def worker():
             try:
                 heard = voice.listen(on_partial=on_partial)
             except RuntimeError as e:
-                self.root.after(0, lambda: self.status_var.set(f"Microphone error: {e}"))
+                self.root.after(0, lambda: (
+                    self.set_listening_indicator(False),
+                    self.set_status(f"Microphone error: {e}")
+                ))
                 return
 
+            self.root.after(0, lambda: self.set_listening_indicator(False))
+
             if not heard:
-                self.root.after(0, lambda: self.status_var.set("Didn't catch anything. Click 🎤 Listen or type below."))
+                self.root.after(0, lambda: self.set_status("Didn't catch anything. Click 🎤 Listen or type below."))
                 return
 
             if is_exit_command(heard):
-                self.root.after(0, lambda: self.status_var.set("Goodbye!"))
+                self.root.after(0, lambda: (
+                    self.append_message("You", heard),
+                    self.append_message("DISHA", "Goodbye!"),
+                    self.set_status("Goodbye!")
+                ))
                 voice.speak("Goodbye!", wait=True)
                 self.root.after(500, self.close)
                 return
 
-            self.root.after(0, lambda: self.status_var.set(f"You: {heard}\n\nThinking..."))
-            answer = route_request(heard)
-            self.root.after(0, lambda: self.status_var.set(f"You: {heard}\n\nDISHA: {answer}"))
+            self.root.after(0, lambda: (
+                self.append_message("You", heard),
+                self.set_status("Thinking...")
+            ))
+
+            streamed = [False]
+
+            def on_stream(chunk_text):
+                streamed[0] = True
+                self.root.after(0, lambda: self.append_streaming_chunk(chunk_text))
+
+            answer = route_request(heard, on_chunk=on_stream)
+            if not streamed[0]:
+                self.root.after(0, lambda: self.append_message("DISHA", answer))
+            else:
+                self.root.after(0, self.finish_streaming)
+
+            self.root.after(0, lambda: self.set_status("Ready."))
             voice.speak(answer, wait=False)
 
         threading.Thread(target=worker, daemon=True).start()
@@ -248,16 +387,30 @@ class DishaAssistantWindow:
         self.entry.delete(0, tk.END)
 
         if is_exit_command(query):
-            self.status_var.set("Goodbye!")
+            self.append_message("You", query)
+            self.append_message("DISHA", "Goodbye!")
+            self.set_status("Goodbye!")
             voice.speak("Goodbye!", wait=True)
             self.close()
             return
 
-        self.status_var.set(f"You: {query}\n\nThinking...")
+        self.append_message("You", query)
+        self.set_status("Thinking...")
 
         def worker():
-            answer = route_request(query)
-            self.root.after(0, lambda: self.status_var.set(f"You: {query}\n\nDISHA: {answer}"))
+            streamed = [False]
+
+            def on_stream(chunk_text):
+                streamed[0] = True
+                self.root.after(0, lambda: self.append_streaming_chunk(chunk_text))
+
+            answer = route_request(query, on_chunk=on_stream)
+            if not streamed[0]:
+                self.root.after(0, lambda: self.append_message("DISHA", answer))
+            else:
+                self.root.after(0, self.finish_streaming)
+
+            self.root.after(0, lambda: self.set_status("Ready."))
             voice.speak(answer, wait=False)
 
         threading.Thread(target=worker, daemon=True).start()
@@ -275,6 +428,9 @@ def open_or_focus_assistant(root, mode: str = "voice"):
     global _assistant_window
     if _assistant_window is None or not tk.Toplevel.winfo_exists(_assistant_window.win):
         _assistant_window = DishaAssistantWindow(root)
+    else:
+        _assistant_window.win.deiconify()
+        _assistant_window.win.attributes("-topmost", True)
 
     if mode == "voice":
         _assistant_window.start_listening()
@@ -299,48 +455,65 @@ class DesktopLogoWidget:
         self.win.attributes("-topmost", True)
         self.win.configure(bg="#11111b")
 
-        # Position near top-right of primary screen
-        self.win.update_idletasks()
-        sw = self.win.winfo_screenwidth()
-        x = max(20, sw - 120)
-        y = 100
-        self.win.geometry(f"64x64+{x}+{y}")
-
-        # Make background transparent so only the circular avatar floats
+        # Make background transparent if supported
         try:
-            self.win.wm_attributes("-transparentcolor", "#11111b")
+            self.win.attributes("-transparentcolor", "#11111b")
         except Exception:
             pass
 
-        self.win.deiconify()
-        self.win.lift()
-        self.win.attributes("-topmost", True)
+        self.size = 56
+        sw = self.win.winfo_screenwidth()
+        sh = self.win.winfo_screenheight()
+        self.win.geometry(f"{self.size}x{self.size}+{sw - 100}+{sh - 180}")
 
-        self._drag_data = {"x": 0, "y": 0}
+        self._drag_x = 0
+        self._drag_y = 0
+        self._moved = False
 
-        # Create glowing rounded avatar canvas
-        canvas = tk.Canvas(self.win, width=64, height=64, bg="#11111b", highlightthickness=0)
-        canvas.pack(fill="both", expand=True)
+        self._build_widget()
 
-        # Draw dark circle with green accent border
-        canvas.create_oval(4, 4, 60, 60, fill="#1e1e2e", outline="#a6e3a1", width=3)
-        canvas.create_text(32, 31, text="D", fill="#a6e3a1", font=("Segoe UI", 22, "bold"))
+    def _build_widget(self):
+        self.canvas = tk.Canvas(
+            self.win,
+            width=self.size,
+            height=self.size,
+            bg="#11111b",
+            highlightthickness=0,
+            cursor="hand2",
+        )
+        self.canvas.pack(fill="both", expand=True)
 
-        canvas.bind("<Button-1>", self._on_click)
-        canvas.bind("<B1-Motion>", self._on_drag)
+        pad = 4
+        self.canvas.create_oval(
+            pad, pad, self.size - pad, self.size - pad,
+            fill="#a6e3a1", outline="#89b4fa", width=2
+        )
+        self.canvas.create_text(
+            self.size // 2, self.size // 2,
+            text="D", fill="#11111b", font=("Segoe UI", 16, "bold")
+        )
 
-    def _on_click(self, event):
-        self._drag_data["x"] = event.x
-        self._drag_data["y"] = event.y
-        # Open DISHA window on click
-        open_or_focus_assistant(self.root, mode="voice")
+        self.canvas.bind("<ButtonPress-1>", self._on_press)
+        self.canvas.bind("<B1-Motion>", self._on_drag)
+        self.canvas.bind("<ButtonRelease-1>", self._on_release)
+
+    def _on_press(self, event):
+        self._drag_x = event.x
+        self._drag_y = event.y
+        self._moved = False
 
     def _on_drag(self, event):
-        deltax = event.x - self._drag_data["x"]
-        deltay = event.y - self._drag_data["y"]
-        x = self.win.winfo_x() + deltax
-        y = self.win.winfo_y() + deltay
-        self.win.geometry(f"+{x}+{y}")
+        dx = event.x - self._drag_x
+        dy = event.y - self._drag_y
+        if abs(dx) > 3 or abs(dy) > 3:
+            self._moved = True
+        nx = self.win.winfo_x() + dx
+        ny = self.win.winfo_y() + dy
+        self.win.geometry(f"+{nx}+{ny}")
+
+    def _on_release(self, event):
+        if not self._moved:
+            open_or_focus_assistant(self.root, mode="voice")
 
 
 # ---------------------------------------------------------------------------
@@ -368,12 +541,22 @@ def build_tray_icon(root):
         icon.stop()
         root.after(0, root.quit)
 
-    menu = pystray.Menu(
+    menu_items = [
         pystray.MenuItem("Speak to DISHA (Ctrl+Alt+V)", on_voice, default=True),
         pystray.MenuItem("Type to DISHA (Ctrl+Alt+D)", on_text),
-        pystray.MenuItem("Quit", on_quit),
-    )
-    icon = pystray.Icon(APP_NAME, make_icon_image(), APP_NAME, menu)
+    ]
+
+    if WEB_ENABLED:
+        local_url = f"http://{web_interface.get_local_ip()}:{WEB_PORT}"
+        menu_items.append(
+            pystray.MenuItem(f"Copy Web URL ({local_url})", lambda icon, item: app_launcher.pyperclip.copy(local_url))
+        )
+
+    menu_items.append(pystray.MenuItem("Quit", on_quit))
+    menu = pystray.Menu(*menu_items)
+
+    tooltip = f"{APP_NAME} (Web: http://{web_interface.get_local_ip()}:{WEB_PORT})" if WEB_ENABLED else APP_NAME
+    icon = pystray.Icon(APP_NAME, make_icon_image(), tooltip, menu)
     return icon
 
 
@@ -401,15 +584,60 @@ def start_hotkey_listener(root):
 
 
 # ---------------------------------------------------------------------------
+# Reminder trigger callback
+# ---------------------------------------------------------------------------
+
+def _fire_reminder(msg: str, root):
+    """Called when scheduler triggers a reminder."""
+    def show():
+        open_or_focus_assistant(root, mode="text")
+        if _assistant_window:
+            _assistant_window.append_message("System", f"⏰ Reminder: {msg}")
+        voice.speak(f"Reminder: {msg}", wait=False)
+    root.after(0, show)
+
+
+# ---------------------------------------------------------------------------
+# Wake Word Listener Thread
+# ---------------------------------------------------------------------------
+
+def _start_wake_word_thread(root):
+    """Start hands-free wake word detection in background daemon thread."""
+    if not WAKE_WORD_ENABLED:
+        return None
+    stop_event = threading.Event()
+    voice.set_root(root)
+    t = threading.Thread(
+        target=lambda: voice.listen_for_wake_word(
+            callback=lambda: open_or_focus_assistant(root, mode="voice"),
+            stop_event=stop_event,
+        ),
+        daemon=True,
+    )
+    t.start()
+    return stop_event
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
 def main():
+    # USB portable mode identity verification
+    if not usb_guard.check_and_verify():
+        sys.exit(0)
+
     if not acquire_single_instance_lock():
         sys.exit(0)
 
     root = tk.Tk()
     root.withdraw()
+
+    # Initialize scheduler with Tk-safe trigger callback
+    scheduler.init(on_trigger=lambda msg: _fire_reminder(msg, root))
+
+    # Initialize remote web interface if enabled
+    web_interface.init(route_fn=route_request)
 
     # Launch Desktop Floating Logo Widget
     DesktopLogoWidget(root)
@@ -421,11 +649,16 @@ def main():
     # Launch Hotkeys
     start_hotkey_listener(root)
 
-    # Startup Voice Greeting
-    threading.Thread(
-        target=lambda: voice.speak(f"Hey, {APP_NAME} here. Click my icon or press Control Alt V whenever you need me."),
-        daemon=True,
-    ).start()
+    # Launch Wake Word listener if enabled
+    _start_wake_word_thread(root)
+
+    # Startup Voice Greeting & Web notification
+    def _announce_startup():
+        voice.speak(f"Hey, {APP_NAME} here. Click my icon or press Control Alt V whenever you need me.")
+        if WEB_ENABLED:
+            voice.speak(f"Web interface ready on port {WEB_PORT}.", wait=False)
+
+    threading.Thread(target=_announce_startup, daemon=True).start()
 
     root.mainloop()
 

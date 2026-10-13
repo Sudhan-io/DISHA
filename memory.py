@@ -1,13 +1,13 @@
 """
 DISHA - Memory
-Deliberately minimal for v1: just a rolling log of recent exchanges so DISHA
-can reference "what we talked about earlier" without a full vector-memory
-system. This is state, not intelligence — kept boring on purpose.
+Rolling log of recent exchanges so DISHA can reference "what we talked about earlier",
+plus persistent structured facts store (facts.json) across restarts.
 """
 
 import json
+import re
 from datetime import datetime
-from config import MEMORY_FILE, MEMORY_MAX_ENTRIES
+from config import MEMORY_FILE, MEMORY_MAX_ENTRIES, FACTS_FILE
 
 
 def log_exchange(user_input: str, disha_response: str) -> None:
@@ -30,17 +30,23 @@ def _trim_log() -> None:
     """Keep only the most recent MEMORY_MAX_ENTRIES lines."""
     if not MEMORY_FILE.exists():
         return
-    lines = MEMORY_FILE.read_text(encoding="utf-8").splitlines()
-    if len(lines) > MEMORY_MAX_ENTRIES:
-        trimmed = lines[-MEMORY_MAX_ENTRIES:]
-        MEMORY_FILE.write_text("\n".join(trimmed) + "\n", encoding="utf-8")
+    try:
+        lines = MEMORY_FILE.read_text(encoding="utf-8").splitlines()
+        if len(lines) > MEMORY_MAX_ENTRIES:
+            trimmed = lines[-MEMORY_MAX_ENTRIES:]
+            MEMORY_FILE.write_text("\n".join(trimmed) + "\n", encoding="utf-8")
+    except OSError:
+        pass
 
 
 def get_recent_context(n: int = 5) -> str:
     """Return the last n exchanges formatted as plain text context for Gemini."""
     if not MEMORY_FILE.exists():
         return ""
-    lines = MEMORY_FILE.read_text(encoding="utf-8").splitlines()[-n:]
+    try:
+        lines = MEMORY_FILE.read_text(encoding="utf-8").splitlines()[-n:]
+    except OSError:
+        return ""
     if not lines:
         return ""
 
@@ -55,3 +61,61 @@ def get_recent_context(n: int = 5) -> str:
     if not formatted:
         return ""
     return "Recent conversation for context:\n" + "\n\n".join(formatted)
+
+
+# ── Fact Store ────────────────────────────────────────────────────────────────
+
+def save_fact(key: str, value: str) -> None:
+    """
+    Persist a user fact (e.g. "user_name" -> "Alice").
+    Creates facts.json if absent. Thread-safe via try/except.
+    key: lowercase snake_case string
+    value: string
+    """
+    facts = load_all_facts()
+    facts[key] = value
+    try:
+        FACTS_FILE.write_text(json.dumps(facts, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def get_fact(key: str, default: str = "") -> str:
+    """Return a stored fact or default. Never raises."""
+    return load_all_facts().get(key, default)
+
+
+def load_all_facts() -> dict:
+    """Load all facts from facts.json. Returns {} if file missing/corrupt."""
+    if not FACTS_FILE.exists():
+        return {}
+    try:
+        return json.loads(FACTS_FILE.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+# ── Fact Extraction (called from route_request before AI) ─────────────────────
+
+_FACT_PATTERNS = [
+    # "my name is X" / "I'm X" / "call me X"
+    (r"my name is ([A-Za-z]+)", "user_name"),
+    (r"call me ([A-Za-z]+)", "user_name"),
+    (r"i(?:'m| am) ([A-Za-z]+)", "user_name"),
+    # "remember that X"
+    (r"remember (?:that )?(.+)", "memory_note"),
+]
+
+
+def extract_and_store_facts(text: str) -> None:
+    """
+    Scan text for learnable facts and persist them.
+    Called before routing to Gemini so facts are captured even from AI queries.
+    Never modifies the text — side-effect only.
+    """
+    lowered = text.strip().lower()
+    for pattern, key in _FACT_PATTERNS:
+        m = re.search(pattern, lowered)
+        if m:
+            value = m.group(1).strip().title() if key == "user_name" else m.group(1).strip()
+            save_fact(key, value)

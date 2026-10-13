@@ -1,64 +1,86 @@
 """
-DISHA - Configuration
-Loads settings from a local .env file so the API key never sits in code.
+DISHA — Configuration v2
+All settings load from .env. Never hardcode values here.
 """
-
 import os
 from pathlib import Path
 from dotenv import load_dotenv
 
-# Load .env file sitting next to this script
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite")
+# ── AI / Online ────────────────────────────────────────────────────────────
+GEMINI_API_KEY     = os.getenv("GEMINI_API_KEY", "")
+GEMINI_MODEL       = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")      # FIXED (was gemini-3.1-flash-lite)
 
-# Hotkey used to summon DISHA's text input box
-HOTKEY = os.getenv("DISHA_HOTKEY", "<ctrl>+<alt>+d")
+# ── Local LLM (Ollama) ─────────────────────────────────────────────────────
+OLLAMA_URL         = os.getenv("DISHA_OLLAMA_URL", "http://localhost:11434/api/generate")
+OLLAMA_MODEL       = os.getenv("DISHA_OLLAMA_MODEL", "llama3.2:3b")
 
-# Hotkey used to trigger offline voice listening
-VOICE_HOTKEY = os.getenv("DISHA_VOICE_HOTKEY", "<ctrl>+<alt>+v")
+# ── Hotkeys ─────────────────────────────────────────────────────────────────
+HOTKEY             = os.getenv("DISHA_HOTKEY", "<ctrl>+<alt>+d")
+VOICE_HOTKEY       = os.getenv("DISHA_VOICE_HOTKEY", "<ctrl>+<alt>+v")
 
-# --- Offline voice (STT + TTS) ---
-# Download a small Vosk model (~50MB) from https://alphacephei.com/vosk/models
-# e.g. "vosk-model-small-en-us-0.15", unzip it, and point this at the folder.
-VOSK_MODEL_PATH = os.getenv("VOSK_MODEL_PATH", str(BASE_DIR / "model"))
-TTS_ENABLED = os.getenv("DISHA_TTS_ENABLED", "true").lower() == "true"
-TTS_RATE = int(os.getenv("DISHA_TTS_RATE", "175"))  # words per minute
-TTS_VOICE_GENDER = os.getenv("DISHA_TTS_VOICE", "female")  # "female" or "male"
-SILENCE_STOP_SECONDS = 1.4  # how long you can pause before DISHA stops listening
+# ── Voice / STT ─────────────────────────────────────────────────────────────
+STT_ENGINE         = os.getenv("DISHA_STT_ENGINE", "whisper").lower() # "whisper" or "vosk"
+WHISPER_MODEL_SIZE = os.getenv("DISHA_WHISPER_MODEL", "base.en")      # "tiny.en", "base.en", "small.en"
+VOSK_MODEL_PATH    = os.getenv("VOSK_MODEL_PATH", str(BASE_DIR / "model"))
+TTS_ENABLED        = os.getenv("DISHA_TTS_ENABLED", "true").lower() == "true"
+TTS_RATE           = int(os.getenv("DISHA_TTS_RATE", "175"))
+TTS_VOICE_GENDER   = os.getenv("DISHA_TTS_VOICE", "female")
+SILENCE_STOP_SECONDS = float(os.getenv("DISHA_SILENCE_STOP", "1.4"))
 
-# --- Local app launcher ---
-# Maps spoken/typed trigger words to the command DISHA runs. All of this is
-# 100% local and offline — it never touches Gemini or the internet.
-# Edit paths to match apps actually installed on your machine.
-APP_COMMANDS = {
-    "vscode": "code",
-    "vs code": "code",
-    "visual studio code": "code",
-    "chrome": "chrome",
-    "notepad": "notepad",
-    "calculator": "calc",
-    "file explorer": "explorer",
-    "explorer": "explorer",
-    "terminal": "wt",
-    "command prompt": "cmd",
+# ── Wake Word ────────────────────────────────────────────────────────────────
+WAKE_WORD_ENABLED  = os.getenv("DISHA_WAKE_WORD", "false").lower() == "true"
+WAKE_WORD          = os.getenv("DISHA_WAKE_PHRASE", "hey disha").lower()
+
+# ── Memory ───────────────────────────────────────────────────────────────────
+MEMORY_FILE        = BASE_DIR / "memory_log.jsonl"
+FACTS_FILE         = BASE_DIR / "facts.json"
+REMINDERS_FILE     = BASE_DIR / "reminders.json"
+MEMORY_MAX_ENTRIES = int(os.getenv("DISHA_MEMORY_MAX", "20"))
+
+# ── Remote Web Interface ─────────────────────────────────────────────────────
+WEB_ENABLED        = os.getenv("DISHA_WEB_ENABLED", "false").lower() == "true"
+WEB_HOST           = os.getenv("DISHA_WEB_HOST", "0.0.0.0")
+WEB_PORT           = int(os.getenv("DISHA_WEB_PORT", "5000"))
+WEB_TOKEN          = os.getenv("DISHA_WEB_TOKEN", "")
+
+# ── USB Portable Mode ────────────────────────────────────────────────────────
+USB_MODE           = os.getenv("DISHA_USB_MODE", "false").lower() == "true"
+DEVICE_ID_FILE     = BASE_DIR / "device_id.txt"
+
+# ── App Launcher ─────────────────────────────────────────────────────────────
+APP_COMMANDS: dict[str, str] = {
+    "vscode": "code", "vs code": "code", "visual studio code": "code",
+    "chrome": "chrome", "google chrome": "chrome",
+    "firefox": "firefox",
+    "notepad": "notepad", "notepad++": "notepad++",
+    "calculator": "calc", "calc": "calc",
+    "file explorer": "explorer", "explorer": "explorer", "files": "explorer",
+    "terminal": "wt", "windows terminal": "wt",
+    "command prompt": "cmd", "cmd": "cmd",
+    "task manager": "taskmgr",
+    "settings": "ms-settings:", "windows settings": "ms-settings:",
+    "paint": "mspaint",
+    "word": "winword", "excel": "excel", "powerpoint": "powerpnt",
+    "spotify": "spotify",
+    "discord": "discord",
+    "zoom": "zoom",
 }
 
-# How DISHA should behave/sound. Edit this freely — this is her personality.
-SYSTEM_PROMPT = """You are DISHA, a personal desktop companion for a developer.
-Keep replies short, warm, and useful — you sit quietly in the background and
-only speak when asked. You are not a generic assistant; you are this user's
-own companion. Avoid corporate or overly formal tone. Be direct, a little
-warm, and never waste the user's time. If a question is ambiguous, make a
-reasonable assumption and answer rather than asking for clarification, unless
-truly necessary."""
+# ── User Profile & Personality ───────────────────────────────────────────────
+USER_NAME = os.getenv("USER_NAME", "User")
 
-# Local memory log (simple recent-history file, not a full memory system yet)
-MEMORY_FILE = BASE_DIR / "memory_log.jsonl"
-MEMORY_MAX_ENTRIES = 20  # how many recent exchanges to keep for context
+SYSTEM_PROMPT = f"""You are DISHA, a personal desktop companion for {USER_NAME}.
+Keep replies SHORT — 2 sentences max unless asked to elaborate.
+You sit quietly in the background and only speak when asked.
+Be direct, warm, and never waste time. No corporate tone.
+If ambiguous, make a reasonable assumption and answer immediately.
+Reference the user's name occasionally but not always.
+Never say 'I cannot' — always find a way or suggest the closest alternative."""
 
-# App metadata
-APP_NAME = "DISHA"
-ICON_PATH = BASE_DIR / "assets" / "icon.png"
+# ── App metadata ──────────────────────────────────────────────────────────────
+APP_NAME       = "DISHA"
+APP_FULL_NAME  = "Desktop Intelligent System for Hybrid Assistance"
+ICON_PATH      = BASE_DIR / "assets" / "icon.png"

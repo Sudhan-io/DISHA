@@ -81,6 +81,27 @@ def _dbg(msg: str) -> None:
 # Text-to-speech (unchanged)
 # ---------------------------------------------------------------------------
 
+def _clean_tts_text(text: str) -> str:
+    """Strip markdown formatting, URLs, code blocks, and emojis so speech sounds natural."""
+    if not text:
+        return ""
+    import re
+    # Remove code blocks and inline code
+    t = re.sub(r"```[\s\S]*?```", " code block omitted. ", text)
+    t = re.sub(r"`[^`]*`", "", t)
+    # Remove markdown links [title](url) -> title
+    t = re.sub(r"\[([^\]]+)\]\([^\)]+\)", r"\1", t)
+    # Remove raw URLs
+    t = re.sub(r"https?://\S+", "", t)
+    # Remove bold, italics, strikethrough, headers, bullet dashes
+    t = re.sub(r"[*_~#]+", "", t)
+    t = re.sub(r"^[-*•]\s+", "", t, flags=re.MULTILINE)
+    t = re.sub(r"─{3,}", "", t)
+    # Remove common emojis and decorative symbols
+    t = re.sub(r"[✨🔴🎙️🗣️🕒🔋💾📋📸⏰ℹ️➤🗖🗗●•]", "", t)
+    return " ".join(t.split())
+
+
 def _tts_speak_direct_sapi(text: str) -> bool:
     """
     Direct Windows SAPI5 COM dispatch. Bypasses pyttsx3 driver loops and
@@ -90,6 +111,11 @@ def _tts_speak_direct_sapi(text: str) -> bool:
         ctypes.windll.ole32.CoInitialize(None)
         try:
             speaker = win32com.client.Dispatch("SAPI.SpVoice")
+            try:
+                sapi_rate = max(-10, min(10, int((TTS_RATE - 175) / 15)))
+                speaker.Rate = sapi_rate
+            except Exception:
+                pass
             try:
                 voices = speaker.GetVoices()
                 for i in range(voices.Count):
@@ -180,9 +206,12 @@ def speak(text: str, wait: bool = False) -> None:
     """
     if not TTS_ENABLED or not text:
         return
+    cleaned = _clean_tts_text(text)
+    if not cleaned:
+        return
     _ensure_tts_thread()
     done_event = threading.Event() if wait else None
-    _tts_queue.put((text, done_event))
+    _tts_queue.put((cleaned, done_event))
     if wait and done_event:
         done_event.wait()
 
@@ -453,7 +482,11 @@ def listen_for_wake_word(callback: Callable[[], None], stop_event: threading.Eve
     def mic_cb(indata, frames, time_info, status):
         audio_queue.put(bytes(indata))
 
-    recognizer = vosk.KaldiRecognizer(model, sample_rate)
+    try:
+        grammar = json.dumps([wake_phrase, "disha", "hey", "[unk]"])
+        recognizer = vosk.KaldiRecognizer(model, sample_rate, grammar)
+    except Exception:
+        recognizer = vosk.KaldiRecognizer(model, sample_rate)
     recognizer.SetWords(False)
 
     while not stop_event.is_set():

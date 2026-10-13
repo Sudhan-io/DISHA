@@ -32,6 +32,77 @@ TTS_RATE           = int(os.getenv("DISHA_TTS_RATE", "175"))
 TTS_VOICE_GENDER   = os.getenv("DISHA_TTS_VOICE", "female")
 SILENCE_STOP_SECONDS = float(os.getenv("DISHA_SILENCE_STOP", "1.6"))
 
+# ── Voice Model Personas ─────────────────────────────────────────────────────
+VOICES_DIR         = BASE_DIR / "models" / "voices"
+VOICE_PROFILE      = os.getenv("DISHA_VOICE_PROFILE", "egirl").lower()
+
+VOICE_PROFILES: dict[str, dict] = {
+    "egirl": {
+        "id": "egirl",
+        "name": "💖 E-Girl Persona (egirl.pth / Anime Character)",
+        "short_name": "💖 E-Girl",
+        "engine": "neural",
+        "neural_voice": "en-US-AnaNeural",
+        "gender": "female",
+        "model_file": "egirl.pth",
+    },
+    "jenny": {
+        "id": "jenny",
+        "name": "✨ Jenny Neural (Natural Expressive Female)",
+        "short_name": "✨ Jenny",
+        "engine": "neural",
+        "neural_voice": "en-US-JennyNeural",
+        "gender": "female",
+        "model_file": None,
+    },
+    "guy": {
+        "id": "guy",
+        "name": "🎙️ Guy Neural (Deep Natural Male)",
+        "short_name": "🎙️ Guy",
+        "engine": "neural",
+        "neural_voice": "en-US-GuyNeural",
+        "gender": "male",
+        "model_file": None,
+    },
+    "aria": {
+        "id": "aria",
+        "name": "🌟 Aria Neural (Polished Assistant)",
+        "short_name": "🌟 Aria",
+        "engine": "neural",
+        "neural_voice": "en-US-AriaNeural",
+        "gender": "female",
+        "model_file": None,
+    },
+    "zira": {
+        "id": "zira",
+        "name": "💻 Windows Zira (Offline SAPI5 Female)",
+        "short_name": "💻 Zira",
+        "engine": "sapi",
+        "neural_voice": "",
+        "gender": "female",
+        "model_file": None,
+    },
+    "david": {
+        "id": "david",
+        "name": "💻 Windows David (Offline SAPI5 Male)",
+        "short_name": "💻 David",
+        "engine": "sapi",
+        "neural_voice": "",
+        "gender": "male",
+        "model_file": None,
+    },
+}
+
+# Sync initial TTS parameters with selected voice profile if valid
+if VOICE_PROFILE in VOICE_PROFILES:
+    _cur_prof = VOICE_PROFILES[VOICE_PROFILE]
+    TTS_ENGINE = os.getenv("DISHA_TTS_ENGINE", _cur_prof["engine"]).lower()
+    if _cur_prof.get("neural_voice"):
+        TTS_NEURAL_VOICE = os.getenv("DISHA_TTS_NEURAL_VOICE", _cur_prof["neural_voice"])
+    if _cur_prof.get("gender"):
+        TTS_VOICE_GENDER = os.getenv("DISHA_TTS_VOICE", _cur_prof["gender"])
+
+
 # ── Wake Word ────────────────────────────────────────────────────────────────
 WAKE_WORD_ENABLED  = os.getenv("DISHA_WAKE_WORD", "false").lower() == "true"
 WAKE_WORD          = os.getenv("DISHA_WAKE_PHRASE", "hey disha").lower()

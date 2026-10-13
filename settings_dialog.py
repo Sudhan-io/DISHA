@@ -260,36 +260,35 @@ class DishaSettingsDialog:
         )
         cb_tts.pack(side="left")
 
-        persona_row = tk.Frame(body, bg="#0d0f17")
-        persona_row.pack(fill="x", pady=4)
+        # Active Voice Model Selector
+        selector_row = tk.Frame(body, bg="#0d0f17")
+        selector_row.pack(fill="x", pady=(6, 2))
 
         tk.Label(
-            persona_row,
-            text="Voice Persona:",
+            selector_row,
+            text="Active Voice Model:",
             bg="#0d0f17",
             fg="#94a3b8",
             font=("Segoe UI", 9),
         ).pack(side="left", padx=(0, 8))
 
-        self.voice_gender_var = tk.StringVar(value=config.TTS_VOICE_GENDER)
-        for g_val, g_label in [("female", "Female (Zira)"), ("male", "Male (David)")]:
-            rb_g = tk.Radiobutton(
-                persona_row,
-                text=g_label,
-                value=g_val,
-                variable=self.voice_gender_var,
-                command=self._on_gender_change,
-                bg="#0d0f17",
-                fg="#f1f5f9",
-                selectcolor="#064e3b",
-                activebackground="#0d0f17",
-                activeforeground="#34d399",
-                font=("Segoe UI", 9),
-            )
-            rb_g.pack(side="left", padx=4)
+        active_profile = voice.get_active_voice_profile()
+        profile_names = [p["name"] for p in config.VOICE_PROFILES.values()]
+        self.voice_var = tk.StringVar(value=active_profile.get("name", profile_names[0]))
+
+        self.voice_combo = ttk.Combobox(
+            selector_row,
+            textvariable=self.voice_var,
+            values=profile_names,
+            state="readonly",
+            font=("Segoe UI", 9),
+            width=36,
+        )
+        self.voice_combo.pack(side="left", fill="x", expand=True)
+        self.voice_combo.bind("<<ComboboxSelected>>", self._on_voice_profile_change)
 
         test_voice_btn = tk.Button(
-            persona_row,
+            selector_row,
             text="🔊 Test Voice",
             command=self._test_voice,
             bg="#1e293b",
@@ -298,11 +297,22 @@ class DishaSettingsDialog:
             activeforeground="#ffffff",
             font=("Segoe UI", 8, "bold"),
             relief="flat",
-            padx=8,
+            padx=10,
             pady=2,
             cursor="hand2",
         )
-        test_voice_btn.pack(side="left", padx=10)
+        test_voice_btn.pack(side="left", padx=(8, 0))
+
+        # Model Details Badge
+        self.voice_desc_lbl = tk.Label(
+            body,
+            text="",
+            bg="#0d0f17",
+            fg="#38bdf8",
+            font=("Segoe UI", 8),
+        )
+        self.voice_desc_lbl.pack(anchor="w", pady=(2, 6))
+        self._update_voice_desc()
 
         # ── Bottom Bar: Done / Close ──────────────────────────────────────────
         bottom_bar = tk.Frame(main, bg="#131622", height=44)
@@ -399,15 +409,53 @@ class DishaSettingsDialog:
         voice.TTS_ENABLED = val
         update_env_file("DISHA_TTS_ENABLED", "true" if val else "false")
 
-    def _on_gender_change(self):
-        val = self.voice_gender_var.get()
-        config.TTS_VOICE_GENDER = val
-        voice.TTS_VOICE_GENDER = val
-        update_env_file("DISHA_TTS_VOICE", val)
+    def _update_voice_desc(self):
+        profile = voice.get_active_voice_profile()
+        eng = "In-Memory Neural (Edge-TTS)" if profile.get("engine") == "neural" else "Windows SAPI5 (Offline Local)"
+        model_str = f" • Local Weights: {profile['model_file']}" if profile.get("model_file") else ""
+        self.voice_desc_lbl.configure(
+            text=f"Engine: {eng}{model_str}",
+            fg="#38bdf8",
+        )
+
+    def _on_voice_profile_change(self, event=None):
+        selected_name = self.voice_var.get()
+        matched_id = "egirl"
+        for p_id, p_info in config.VOICE_PROFILES.items():
+            if p_info["name"] == selected_name or p_id == selected_name:
+                matched_id = p_id
+                break
+
+        voice.set_voice_profile(matched_id)
+        update_env_file("DISHA_VOICE_PROFILE", matched_id)
+        update_env_file("DISHA_TTS_ENGINE", config.TTS_ENGINE)
+        if config.TTS_NEURAL_VOICE:
+            update_env_file("DISHA_TTS_NEURAL_VOICE", config.TTS_NEURAL_VOICE)
+        update_env_file("DISHA_TTS_VOICE", config.TTS_VOICE_GENDER)
+        self._update_voice_desc()
 
     def _test_voice(self):
+        profile = voice.get_active_voice_profile()
+        p_id = profile.get("id", "egirl")
+        user = getattr(config, "USER_NAME", "Sudhan")
+
         def _speak():
-            voice.speak("Hello Sudhan, your voice output settings are working perfectly.", wait=False)
+            if p_id == "egirl":
+                sample = f"Hey {user}! The E-Girl voice model is active. How do I sound?"
+            elif p_id == "jenny":
+                sample = f"Hello {user}, Jenny Neural is configured and ready to assist you."
+            elif p_id == "guy":
+                sample = f"Hey {user}, Guy Neural is configured and ready."
+            elif p_id == "aria":
+                sample = f"Hello {user}, Aria Neural assistant voice is online."
+            elif p_id == "zira":
+                sample = f"Hello {user}, Windows Zira offline voice is active."
+            elif p_id == "david":
+                sample = f"Hello {user}, Windows David offline voice is active."
+            else:
+                sample = f"Hello {user}, your voice settings are working properly."
+            voice.speak(sample, wait=False)
+
         threading.Thread(target=_speak, daemon=True).start()
 
     def close(self):

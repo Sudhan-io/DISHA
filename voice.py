@@ -249,6 +249,33 @@ def _select_voice(engine, preferred_gender: str) -> None:
             return
 
 
+def set_voice_profile(profile_id: str) -> bool:
+    """Set the active voice persona and sync engine & voice parameters."""
+    profile = getattr(_cfg, "VOICE_PROFILES", {}).get(profile_id)
+    if not profile:
+        return False
+    _cfg.VOICE_PROFILE = profile_id
+    _cfg.TTS_ENGINE = profile["engine"]
+    if profile.get("neural_voice"):
+        _cfg.TTS_NEURAL_VOICE = profile["neural_voice"]
+    if profile.get("gender"):
+        _cfg.TTS_VOICE_GENDER = profile["gender"]
+    return True
+
+
+def get_active_voice_profile() -> dict:
+    """Return dictionary of the currently active voice profile."""
+    prof_id = getattr(_cfg, "VOICE_PROFILE", "egirl")
+    profiles = getattr(_cfg, "VOICE_PROFILES", {})
+    return profiles.get(prof_id, profiles.get("egirl", {
+        "id": "egirl",
+        "name": "💖 E-Girl Persona (egirl.pth / Anime Character)",
+        "short_name": "💖 E-Girl",
+        "engine": "neural",
+        "neural_voice": "en-US-AnaNeural"
+    }))
+
+
 def speak(text: str, wait: bool = False) -> None:
     """
     Speak text aloud, fully offline. No-op if TTS is disabled in config.

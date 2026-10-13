@@ -298,6 +298,23 @@ class DishaAssistantWindow:
         )
         self.status_pill.pack(side="left", padx=12)
 
+        # Voice Model Persona Badge in Header
+        self.voice_badge = tk.Label(
+            header,
+            text=self._get_short_voice_name(),
+            bg="#1e1b4b",
+            fg="#c084fc",
+            font=("Segoe UI", 8, "bold"),
+            padx=8,
+            pady=2,
+            bd=0,
+            cursor="hand2",
+        )
+        self.voice_badge.pack(side="left", padx=(0, 8))
+        self.voice_badge.bind("<Button-1>", lambda e: self.open_settings())
+        self.voice_badge.bind("<Enter>", lambda e: self.voice_badge.configure(bg="#312e81"))
+        self.voice_badge.bind("<Leave>", lambda e: self.voice_badge.configure(bg="#1e1b4b"))
+
         # Window Controls & Tools
         right_group = tk.Frame(header, bg="#131622")
         right_group.pack(side="right", padx=10)
@@ -770,9 +787,22 @@ class DishaAssistantWindow:
 
         threading.Thread(target=worker, daemon=True).start()
 
+    def _get_short_voice_name(self) -> str:
+        """Return formatted voice persona name for header chip."""
+        prof = voice.get_active_voice_profile()
+        short = prof.get("short_name")
+        if not short:
+            short = prof.get("name", "Voice").split("(")[0].strip()
+        return f"🔊 {short}"
+
+    def _refresh_voice_badge(self):
+        """Update header badge with current active voice persona."""
+        if hasattr(self, "voice_badge"):
+            self.voice_badge.configure(text=self._get_short_voice_name())
+
     def open_settings(self):
-        """Open the interactive settings dialog to manage API keys and models."""
-        settings_dialog.open_settings_dialog(self.win)
+        """Open the interactive settings dialog to manage API keys, models, and voice."""
+        settings_dialog.open_settings_dialog(self.win, on_close=self._refresh_voice_badge)
 
     def minimize(self):
         """Minimize assistant window to background tray and floating avatar."""

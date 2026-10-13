@@ -28,47 +28,71 @@ CLOSE_TRIGGERS = ("close ", "quit ", "kill ")
 
 # ── System Command Handlers ───────────────────────────────────────────────────
 
+def _set_volume_pycaw(level: int) -> bool:
+    try:
+        from pycaw.pycaw import AudioUtilities
+        speakers = AudioUtilities.GetSpeakers()
+        if speakers and hasattr(speakers, "volume_percent"):
+            speakers.volume_percent = float(level)
+            return True
+        elif speakers and hasattr(speakers, "EndpointVolume"):
+            speakers.EndpointVolume.SetMasterVolumeLevelScalar(level / 100.0, None)
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def _cmd_set_volume(match) -> str:
     level = int(match.group(1))
     level = max(0, min(100, level))
-    subprocess.run(
-        [
-            "powershell", "-Command",
-            f"$obj = New-Object -ComObject WScript.Shell; "
-            f"1..50 | ForEach-Object {{ $obj.SendKeys([char]174) }}; "
-            f"$steps = [Math]::Round({level} / 2); "
-            f"1..$steps | ForEach-Object {{ $obj.SendKeys([char]175) }}"
-        ],
-        capture_output=True,
-        shell=False,
-    )
+    if _set_volume_pycaw(level):
+        return f"Volume set to {level}%."
+    # Fast fallback: VK_VOLUME keys
+    steps = int(level / 2)
+    for _ in range(50):
+        ctypes.windll.user32.keybd_event(0xAE, 0, 0, 0)
+        ctypes.windll.user32.keybd_event(0xAE, 0, 2, 0)
+    for _ in range(steps):
+        ctypes.windll.user32.keybd_event(0xAF, 0, 0, 0)
+        ctypes.windll.user32.keybd_event(0xAF, 0, 2, 0)
     return f"Volume set to approximately {level}%."
 
 
 def _cmd_volume_change(match) -> str:
     direction = match.group(1)
-    key_char = 175 if direction == "up" else 174
-    subprocess.run(
-        [
-            "powershell", "-Command",
-            f"$obj = New-Object -ComObject WScript.Shell; "
-            f"1..5 | ForEach-Object {{ $obj.SendKeys([char]{key_char}) }}"
-        ],
-        capture_output=True,
-        shell=False,
-    )
+    delta = 10 if direction == "up" else -10
+    try:
+        from pycaw.pycaw import AudioUtilities
+        speakers = AudioUtilities.GetSpeakers()
+        if speakers and hasattr(speakers, "volume_percent"):
+            curr = speakers.volume_percent
+            target = max(0.0, min(100.0, curr + delta))
+            speakers.volume_percent = target
+            return f"Volume turned {direction} to {int(target)}%."
+    except Exception:
+        pass
+    # Fast fallback: 5 key taps via ctypes
+    vk = 0xAF if direction == "up" else 0xAE
+    for _ in range(5):
+        ctypes.windll.user32.keybd_event(vk, 0, 0, 0)
+        ctypes.windll.user32.keybd_event(vk, 0, 2, 0)
     return f"Volume turned {direction}."
 
 
 def _cmd_mute_toggle(match) -> str:
-    subprocess.run(
-        [
-            "powershell", "-Command",
-            "$obj = New-Object -ComObject WScript.Shell; $obj.SendKeys([char]173)"
-        ],
-        capture_output=True,
-        shell=False,
-    )
+    try:
+        from pycaw.pycaw import AudioUtilities
+        speakers = AudioUtilities.GetSpeakers()
+        if speakers and hasattr(speakers, "EndpointVolume"):
+            is_muted = speakers.EndpointVolume.GetMute()
+            speakers.EndpointVolume.SetMute(0 if is_muted else 1, None)
+            return "Unmuted volume." if is_muted else "Muted volume."
+    except Exception:
+        pass
+    # Fast fallback: VK_VOLUME_MUTE
+    ctypes.windll.user32.keybd_event(0xAD, 0, 0, 0)
+    ctypes.windll.user32.keybd_event(0xAD, 0, 2, 0)
     return "Toggled mute."
 
 
@@ -315,6 +339,17 @@ def _launch_app(app_name: str) -> Optional[str]:
                     return f"Opening {match}."
                 except Exception as e:
                     return f"Couldn't open {match}: {e}"
+
+    # 4. PATH and Windows command fallback (e.g. mspaint, notepad, cmd, calc)
+    import shutil
+    clean_target = app_name.split()[0] if app_name else ""
+    exe_path = shutil.which(clean_target) or shutil.which(f"{clean_target}.exe")
+    if exe_path:
+        try:
+            os.startfile(exe_path)
+            return f"Opening {app_name}."
+        except Exception as e:
+            return f"Couldn't open {app_name}: {e}"
 
     return None
 

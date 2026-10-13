@@ -52,11 +52,30 @@ def _ans_gpu(m, text: str) -> str:
             capture_output=True, text=True, timeout=2
         )
         if res.returncode == 0 and res.stdout.strip():
-            parts = [p.strip() for p in res.stdout.strip().split(",")]
-            util, mem_used, mem_total, temp, name = parts[0], parts[1], parts[2], parts[3], parts[4]
-            return f"{name}: {util}% utilization ({temp}°C, VRAM: {mem_used} MB of {mem_total} MB used)."
+            lines = [line.strip() for line in res.stdout.strip().splitlines() if line.strip()]
+            reports = []
+            for line in lines:
+                parts = [p.strip() for p in line.split(",")]
+                if len(parts) >= 5:
+                    util, mem_used, mem_total, temp, name = parts[0], parts[1], parts[2], parts[3], parts[4]
+                    reports.append(f"{name}: {util}% utilization ({temp}°C, VRAM: {mem_used} MB of {mem_total} MB used).")
+            if reports:
+                return " ".join(reports)
     except Exception:
         pass
+
+    # Windows CIM fallback for non-NVIDIA or sleeping dGPUs
+    try:
+        res = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", "(Get-CimInstance Win32_VideoController).Name"],
+            capture_output=True, text=True, timeout=2
+        )
+        if res.returncode == 0 and res.stdout.strip():
+            gpus = [g.strip() for g in res.stdout.strip().splitlines() if g.strip()]
+            return "Active GPUs: " + ", ".join(gpus) + " (Hardware sensors idle)."
+    except Exception:
+        pass
+
     return "GPU metrics could not be retrieved from hardware sensors."
 
 
@@ -90,34 +109,63 @@ def _ans_wifi(m, text: str) -> str:
         return "Can't read Wi-Fi info right now."
 
 
-def _ans_math_add(m, text: str) -> str:
-    a, b = float(m.group(1)), float(m.group(2))
-    result = a + b
-    return f"{a:g} + {b:g} = {result:g}"
+def _ans_clipboard(m, text: str) -> str:
+    try:
+        import pyperclip
+        content = pyperclip.paste().strip()
+        if not content:
+            return "Clipboard is empty."
+        if len(content) > 120:
+            content = content[:117] + "..."
+        return f"Clipboard: {content}"
+    except Exception:
+        return "Clipboard is empty."
 
 
-def _ans_math_sub(m, text: str) -> str:
-    a, b = float(m.group(1)), float(m.group(2))
-    return f"{a:g} - {b:g} = {a - b:g}"
+def _ans_smart_math(m, text: str) -> str:
+    """Evaluate arithmetic, percentages, square roots, and powers safely via SymPy."""
+    import re
+    cleaned = text.lower().strip()
+    # Check for percentage: "X % of Y" or "X percent of Y"
+    pct_m = re.search(r"(\d+\.?\d*)\s*(?:%|percent)\s+of\s+(\d+\.?\d*)", cleaned)
+    if pct_m:
+        val = (float(pct_m.group(1)) / 100.0) * float(pct_m.group(2))
+        return f"{pct_m.group(1)}% of {pct_m.group(2)} = {val:g}"
 
+    calc_expr = cleaned
+    for prefix in ["what is", "calculate", "solve", "math", "what's"]:
+        if calc_expr.startswith(prefix):
+            calc_expr = calc_expr[len(prefix):].strip()
+    calc_expr = calc_expr.rstrip("?").strip()
+    calc_expr = calc_expr.replace("×", "*").replace("x", "*").replace("÷", "/").replace("^", "**")
 
-def _ans_math_mul(m, text: str) -> str:
-    a, b = float(m.group(1)), float(m.group(2))
-    return f"{a:g} × {b:g} = {a * b:g}"
+    try:
+        import sympy
+        if re.match(r"^[0-9\.\+\-\*\/\(\)\s\^\,sqrt]+$", calc_expr):
+            res = sympy.sympify(calc_expr).evalf()
+            res_float = float(res)
+            return f"{calc_expr} = {res_float:g}"
+    except Exception:
+        pass
 
-
-def _ans_math_div(m, text: str) -> str:
-    a, b = float(m.group(1)), float(m.group(2))
-    if b == 0:
-        return "Can't divide by zero."
-    return f"{a:g} ÷ {b:g} = {a / b:g}"
+    # Basic fallback
+    if m and len(m.groups()) >= 2:
+        try:
+            a, b = float(m.group(1)), float(m.group(2))
+            if "+" in cleaned: return f"{a:g} + {b:g} = {a+b:g}"
+            if "-" in cleaned: return f"{a:g} - {b:g} = {a-b:g}"
+            if "*" in cleaned or "×" in cleaned: return f"{a:g} × {b:g} = {a*b:g}"
+            if "/" in cleaned or "÷" in cleaned: return "Can't divide by zero." if b == 0 else f"{a:g} ÷ {b:g} = {a/b:g}"
+        except Exception:
+            pass
+    return "Could not compute math expression."
 
 
 def _ans_help(m, text: str) -> str:
     return (
         "I can: open and close apps, control volume, take screenshots, "
-        "lock your screen, check battery/CPU/RAM, tell you the time and date, "
-        "set reminders, answer questions via Gemini when online, "
+        "lock your screen, check battery/CPU/RAM/GPU, read clipboard, tell you time and date, "
+        "set reminders, answer questions via Gemini or local Ollama, "
         "and hear you out even when you just need to think aloud."
     )
 
@@ -160,10 +208,10 @@ _PATTERNS: list[tuple[str, Callable]] = [
     (r"\bram\b|\bmemory\b|\bram usage\b", _ans_ram),
     (r"\bdisk\b|\bstorage\b|\bdrive space\b|\bhard drive\b|\bssd\b", _ans_disk),
     (r"\bwifi\b|\bwi-?fi\b|\bnetwork\b", _ans_wifi),
-    (r"(\d+\.?\d*)\s*\+\s*(\d+\.?\d*)", _ans_math_add),
-    (r"(\d+\.?\d*)\s*\*\s*(\d+\.?\d*)", _ans_math_mul),
-    (r"(\d+\.?\d*)\s*/\s*(\d+\.?\d*)", _ans_math_div),
-    (r"(\d+\.?\d*)\s*-\s*(\d+\.?\d*)", _ans_math_sub),
+    (r"what did i (just )?copy|clipboard", _ans_clipboard),
+    (r"(\d+\.?\d*)\s*(?:%|percent)\s+of\s+(\d+\.?\d*)", _ans_smart_math),
+    (r"(\d+\.?\d*)\s*[\+\-\*\/]\s*(\d+\.?\d*)", _ans_smart_math),
+    (r"(?:calculate|solve|what is|what's)\s+[0-9\.\+\-\*\/\(\)\s\^\%]+", _ans_smart_math),
     (r"what can (you|u) do|what do (you|u) do|what can disha do|features|capabilities|help me", _ans_help),
     (r"\bhi\b|\bhello\b|\bhey\b", _ans_greeting),
     (r"\bthank(s| you)\b", _ans_thanks),

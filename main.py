@@ -1151,6 +1151,16 @@ def _start_wake_word_thread(root):
 # ---------------------------------------------------------------------------
 
 def main():
+    # Enable crisp Windows High-DPI scaling
+    try:
+        import ctypes
+        try:
+            ctypes.windll.shcore.SetProcessDpiAwareness(1)
+        except Exception:
+            ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
+
     root = tk.Tk()
     root.withdraw()
 

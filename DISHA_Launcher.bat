@@ -19,11 +19,15 @@ set PYTHONW=%DISHA_DIR%\venv\Scripts\pythonw.exe
 set MAIN=%DISHA_DIR%\main.py
 
 if not exist "%PYTHONW%" (
-    echo [ERROR] DISHA virtual environment not found!
-    echo Looked at: "%PYTHONW%"
-    echo Please make sure the venv folder is present in the DISHA folder.
-    pause
-    exit /b 1
+    if exist "%DISHA_DIR%\venv\Scripts\python.exe" (
+        set PYTHONW=%DISHA_DIR%\venv\Scripts\python.exe
+    ) else (
+        echo [ERROR] DISHA virtual environment not found!
+        echo Looked at: "%PYTHONW%"
+        echo Please ensure the venv folder is installed in the DISHA folder.
+        pause
+        exit /b 1
+    )
 )
 
 cd /d "%DISHA_DIR%"

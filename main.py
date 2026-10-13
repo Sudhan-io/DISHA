@@ -86,7 +86,15 @@ def acquire_single_instance_lock(on_activate: Optional[Callable] = None) -> bool
 # ---------------------------------------------------------------------------
 # Exit Triggers ("go", "bye", "exit", "close", etc.)
 # ---------------------------------------------------------------------------
-EXIT_WORDS = {"go", "go away", "bye", "goodbye", "exit", "close", "dismiss", "hide", "stop", "shut up"}
+EXIT_WORDS = {
+    "go", "go away", "bye", "goodbye", "exit", "close", "dismiss",
+    "hide", "stop", "shut up", "bye bye", "see ya", "later", "quit", "minimize"
+}
+
+VOICE_STOP_PHRASES = (
+    "stop voice", "exit voice", "disable voice", "turn off voice",
+    "stop listening", "cancel voice", "quit voice", "end voice"
+)
 
 
 def is_exit_command(text: str) -> bool:
@@ -105,7 +113,7 @@ def is_screen_query(text: str) -> bool:
         "on my screen", "look at my screen", "see my screen", "read my screen",
         "check my screen", "analyze my screen", "describe my screen",
         "what am i looking at", "can you see my screen", "take a look at my screen",
-        "screenshot"
+        "screenshot", "what do you see", "what do u see", "what's open", "whats open"
     ]
     return any(k in t for k in keywords)
 
@@ -840,7 +848,7 @@ class DishaAssistantWindow:
                 if not heard:
                     continue
 
-                if is_exit_command(heard) or "stop voice" in heard.lower() or "exit voice" in heard.lower():
+                if is_exit_command(heard) or any(p in heard.lower() for p in VOICE_STOP_PHRASES):
                     self.root.after(0, lambda: (
                         self.append_message("You", heard),
                         self.append_message("DISHA", "Exiting voice mode. Have a great day!"),
@@ -880,6 +888,7 @@ class DishaAssistantWindow:
     def stop_voice_mode(self):
         """Halt continuous voice loop and restore standard ready state."""
         self._voice_mode_active = False
+        voice.cancel_listen()
         self.voice_mode_btn.configure(
             text="🗣️ Voice Mode",
             bg="#1c1929",
@@ -889,6 +898,7 @@ class DishaAssistantWindow:
         self.set_status("Ready.")
 
     def close(self):
+        voice.cancel_listen()
         if self._voice_mode_active:
             self.stop_voice_mode()
         try:

@@ -33,8 +33,15 @@ def _ans_battery(m, text: str) -> str:
     return f"Battery is at {pct}%, {charging}."
 
 
+_last_gpu_check = 0.0
+_cached_gpu_str = ""
+
+_last_wifi_check = 0.0
+_cached_wifi_str = ""
+
+
 def _ans_cpu(m, text: str) -> str:
-    pct = psutil.cpu_percent(interval=0.5)
+    pct = psutil.cpu_percent(interval=None)
     return f"CPU is at {pct:.0f}% right now."
 
 
@@ -46,6 +53,12 @@ def _ans_ram(m, text: str) -> str:
 
 
 def _ans_gpu(m, text: str) -> str:
+    global _last_gpu_check, _cached_gpu_str
+    import time
+    now = time.monotonic()
+    if _cached_gpu_str and (now - _last_gpu_check) < 5.0:
+        return _cached_gpu_str
+
     try:
         res = subprocess.run(
             ["nvidia-smi", "--query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu,name", "--format=csv,noheader,nounits"],
@@ -60,7 +73,9 @@ def _ans_gpu(m, text: str) -> str:
                     util, mem_used, mem_total, temp, name = parts[0], parts[1], parts[2], parts[3], parts[4]
                     reports.append(f"{name}: {util}% utilization ({temp}°C, VRAM: {mem_used} MB of {mem_total} MB used).")
             if reports:
-                return " ".join(reports)
+                _cached_gpu_str = " ".join(reports)
+                _last_gpu_check = now
+                return _cached_gpu_str
     except Exception:
         pass
 
@@ -72,7 +87,9 @@ def _ans_gpu(m, text: str) -> str:
         )
         if res.returncode == 0 and res.stdout.strip():
             gpus = [g.strip() for g in res.stdout.strip().splitlines() if g.strip()]
-            return "Active GPUs: " + ", ".join(gpus) + " (Hardware sensors idle)."
+            _cached_gpu_str = "Active GPUs: " + ", ".join(gpus) + " (Hardware sensors idle)."
+            _last_gpu_check = now
+            return _cached_gpu_str
     except Exception:
         pass
 
@@ -95,6 +112,12 @@ def _ans_disk(m, text: str) -> str:
 
 
 def _ans_wifi(m, text: str) -> str:
+    global _last_wifi_check, _cached_wifi_str
+    import time
+    now = time.monotonic()
+    if _cached_wifi_str and (now - _last_wifi_check) < 5.0:
+        return _cached_wifi_str
+
     try:
         result = subprocess.run(
             ["netsh", "wlan", "show", "interfaces"],
@@ -103,8 +126,12 @@ def _ans_wifi(m, text: str) -> str:
         for line in result.stdout.splitlines():
             if "SSID" in line and "BSSID" not in line:
                 ssid = line.split(":", 1)[-1].strip()
-                return f"You're connected to '{ssid}'."
-        return "Not connected to any Wi-Fi network."
+                _cached_wifi_str = f"You're connected to '{ssid}'."
+                _last_wifi_check = now
+                return _cached_wifi_str
+        _cached_wifi_str = "Not connected to any Wi-Fi network."
+        _last_wifi_check = now
+        return _cached_wifi_str
     except Exception:
         return "Can't read Wi-Fi info right now."
 
@@ -123,9 +150,17 @@ def _ans_clipboard(m, text: str) -> str:
 
 
 def _ans_smart_math(m, text: str) -> str:
-    """Evaluate arithmetic, percentages, square roots, and powers safely via SymPy."""
+    """Evaluate arithmetic, percentages, square roots, and powers safely via SymPy and math."""
     import re
     cleaned = text.lower().strip()
+
+    # Check for square root: "square root of X" or "sqrt of X"
+    sqrt_m = re.search(r"(?:square root of|square root|sqrt of|sqrt)\s+(\d+\.?\d*)", cleaned)
+    if sqrt_m:
+        num = float(sqrt_m.group(1))
+        val = math.sqrt(num)
+        return f"The square root of {sqrt_m.group(1)} is {val:g}"
+
     # Check for percentage: "X % of Y" or "X percent of Y"
     pct_m = re.search(r"(\d+\.?\d*)\s*(?:%|percent)\s+of\s+(\d+\.?\d*)", cleaned)
     if pct_m:
@@ -209,6 +244,7 @@ _PATTERNS: list[tuple[str, Callable]] = [
     (r"\bdisk\b|\bstorage\b|\bdrive space\b|\bhard drive\b|\bssd\b", _ans_disk),
     (r"\bwifi\b|\bwi-?fi\b|\bnetwork\b", _ans_wifi),
     (r"what did i (just )?copy|clipboard", _ans_clipboard),
+    (r"(?:square root|sqrt)\s*(?:of)?\s*\d+", _ans_smart_math),
     (r"(\d+\.?\d*)\s*(?:%|percent)\s+of\s+(\d+\.?\d*)", _ans_smart_math),
     (r"(\d+\.?\d*)\s*[\+\-\*\/]\s*(\d+\.?\d*)", _ans_smart_math),
     (r"(?:calculate|solve|what is|what's)\s+[0-9\.\+\-\*\/\(\)\s\^\%]+", _ans_smart_math),

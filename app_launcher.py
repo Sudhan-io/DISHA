@@ -166,8 +166,12 @@ def _cmd_read_clipboard(match) -> str:
         return f"Couldn't read clipboard: {e}"
 
 
+_last_wifi_check = 0.0
+_cached_wifi_str = ""
+
+
 def _cmd_cpu_usage(match) -> str:
-    pct = psutil.cpu_percent(interval=0.5)
+    pct = psutil.cpu_percent(interval=None)
     return f"CPU usage is at {pct:.0f}%."
 
 
@@ -179,6 +183,12 @@ def _cmd_ram_usage(match) -> str:
 
 
 def _cmd_wifi_name(match) -> str:
+    global _last_wifi_check, _cached_wifi_str
+    import time
+    now = time.monotonic()
+    if _cached_wifi_str and (now - _last_wifi_check) < 5.0:
+        return _cached_wifi_str
+
     try:
         result = subprocess.run(
             ["netsh", "wlan", "show", "interfaces"],
@@ -187,8 +197,12 @@ def _cmd_wifi_name(match) -> str:
         for line in result.stdout.splitlines():
             if "SSID" in line and "BSSID" not in line:
                 ssid = line.split(":", 1)[-1].strip()
-                return f"Connected to Wi-Fi '{ssid}'."
-        return "Not connected to any Wi-Fi network."
+                _cached_wifi_str = f"Connected to Wi-Fi '{ssid}'."
+                _last_wifi_check = now
+                return _cached_wifi_str
+        _cached_wifi_str = "Not connected to any Wi-Fi network."
+        _last_wifi_check = now
+        return _cached_wifi_str
     except Exception:
         return "Can't read Wi-Fi info right now."
 
@@ -300,14 +314,23 @@ def _discover_installed_apps() -> dict[str, str]:
     return _discovered_apps
 
 
+PROTECTED_PROCESSES = {
+    "explorer.exe", "svchost.exe", "csrss.exe", "lsass.exe",
+    "smss.exe", "winlogon.exe", "services.exe", "system.exe", "idle.exe"
+}
+
+
 def _launch_app(app_name: str) -> Optional[str]:
     # 1. Curated APP_COMMANDS first
     command = APP_COMMANDS.get(app_name)
     if command:
         try:
-            subprocess.Popen(command, shell=True)
+            if command.startswith("ms-settings:"):
+                os.startfile(command)
+            else:
+                subprocess.Popen(command, shell=True)
             return f"Opening {app_name}."
-        except OSError as e:
+        except Exception as e:
             return f"Couldn't open {app_name}: {e}"
 
     # 2. Dynamic discovered apps (exact match)
@@ -328,9 +351,12 @@ def _launch_app(app_name: str) -> Optional[str]:
             if match in APP_COMMANDS:
                 cmd = APP_COMMANDS[match]
                 try:
-                    subprocess.Popen(cmd, shell=True)
+                    if cmd.startswith("ms-settings:"):
+                        os.startfile(cmd)
+                    else:
+                        subprocess.Popen(cmd, shell=True)
                     return f"Opening {match}."
-                except OSError as e:
+                except Exception as e:
                     return f"Couldn't open {match}: {e}"
             elif match in discovered:
                 target = discovered[match]
@@ -378,12 +404,20 @@ def _close_app(app_name: str) -> Optional[str]:
     if not exe_guess:
         return None
 
+    if exe_guess.lower() in PROTECTED_PROCESSES:
+        return f"For system stability, closing {app_name} is restricted."
+
     try:
-        subprocess.run(
+        proc = subprocess.run(
             ["taskkill", "/IM", exe_guess, "/F"],
             shell=False,
             capture_output=True,
+            text=True,
         )
+        if proc.returncode == 0:
+            return f"Closed {app_name}."
+        elif "not found" in proc.stderr.lower():
+            return f"{app_name} doesn't appear to be running."
         return f"Closed {app_name}."
     except OSError as e:
         return f"Couldn't close {app_name}: {e}"

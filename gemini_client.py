@@ -42,16 +42,31 @@ def _get_model():
     )
 
 
-def is_online(timeout: float = 2.0) -> bool:
-    """Quick, reliable connectivity check before attempting an API call."""
+_last_online_check = 0.0
+_last_online_status = False
+
+
+def is_online(timeout: float = 1.5, force: bool = False) -> bool:
+    """Quick, reliable connectivity check with 2.5s caching to eliminate socket thrashing."""
+    global _last_online_check, _last_online_status
+    import time
+    now = time.monotonic()
+    if not force and (now - _last_online_check) < 2.5:
+        return _last_online_status
+
     for host, port in (("1.1.1.1", 443), ("8.8.8.8", 443), ("8.8.8.8", 53)):
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.settimeout(timeout)
                 s.connect((host, port))
+            _last_online_check = now
+            _last_online_status = True
             return True
         except OSError:
             continue
+
+    _last_online_check = now
+    _last_online_status = False
     return False
 
 

@@ -62,8 +62,14 @@ _tts_queue = queue.Queue()
 _tts_thread = None
 
 _listen_lock = threading.Lock()
+_interrupt_event = threading.Event()
 _noise_floor = 150.0  # adaptive; persists between listening sessions
 _root_ref = None
+
+
+def cancel_listen() -> None:
+    """Signal any currently active listen() session to cancel and return immediately."""
+    _interrupt_event.set()
 
 
 def set_root(root) -> None:
@@ -375,6 +381,7 @@ def listen(sample_rate: int = 16000, max_seconds: float = None, on_partial=None)
     if not _listen_lock.acquire(blocking=False):
         return ""
     try:
+        _interrupt_event.clear()
         _wait_for_tts()
 
         use_whisper = getattr(_cfg, "STT_ENGINE", "whisper") == "whisper"
@@ -411,6 +418,9 @@ def listen(sample_rate: int = 16000, max_seconds: float = None, on_partial=None)
                 callback=callback,
             ):
                 while True:
+                    if _interrupt_event.is_set():
+                        _dbg("listen() interrupted by cancel signal")
+                        return ""
                     now = time.monotonic()
                     if now - t_start > max_seconds:
                         break

@@ -475,8 +475,8 @@ def api_ask():
     try:
         response = _route_fn(query)
         return jsonify({"response": response})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except Exception:
+        return jsonify({"error": "Internal processing error. Please try again."}), 500
 
 
 @_app.route("/api/status", methods=["GET"])

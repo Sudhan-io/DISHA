@@ -34,6 +34,7 @@ import scheduler
 import voice
 import usb_guard
 import web_interface
+import settings_dialog
 
 # ---------------------------------------------------------------------------
 # Single-instance guard with IPC activation
@@ -187,6 +188,9 @@ class DishaAssistantWindow:
         self._current_stream_mark = None
         self._animating_vis = False
         self._vis_phase = 0
+        self._voice_mode_active = False
+        self._is_maximized = False
+        self._prev_geom = None
 
         self._init_styles()
         self._build_ui()
@@ -268,10 +272,43 @@ class DishaAssistantWindow:
         )
         self.status_pill.pack(side="left", padx=12)
 
-        # Window Controls (Clear History + Close)
+        # Window Controls & Tools
         right_group = tk.Frame(header, bg="#131622")
-        right_group.pack(side="right", padx=12)
+        right_group.pack(side="right", padx=10)
 
+        # 1. Continuous Voice Mode Toggle Chip
+        self.voice_mode_btn = tk.Label(
+            right_group,
+            text="🗣️ Voice Mode",
+            bg="#1c1929",
+            fg="#c084fc",
+            font=("Segoe UI", 8, "bold"),
+            padx=8,
+            pady=3,
+            cursor="hand2",
+            bd=0,
+        )
+        self.voice_mode_btn.pack(side="left", padx=(0, 8))
+        self.voice_mode_btn.bind("<Button-1>", lambda e: self.toggle_voice_mode())
+        self.voice_mode_btn.bind("<Enter>", lambda e: self.voice_mode_btn.configure(bg="#2e1065") if not self._voice_mode_active else None)
+        self.voice_mode_btn.bind("<Leave>", lambda e: self.voice_mode_btn.configure(bg="#1c1929") if not self._voice_mode_active else None)
+
+        # 2. Settings Dialog Button
+        settings_btn = tk.Label(
+            right_group,
+            text="⚙️",
+            bg="#131622",
+            fg="#94a3b8",
+            font=("Segoe UI", 10),
+            cursor="hand2",
+            padx=3,
+        )
+        settings_btn.pack(side="left", padx=(0, 6))
+        settings_btn.bind("<Button-1>", lambda e: self.open_settings())
+        settings_btn.bind("<Enter>", lambda e: settings_btn.configure(fg="#38bdf8"))
+        settings_btn.bind("<Leave>", lambda e: settings_btn.configure(fg="#94a3b8"))
+
+        # 3. Clear Chat History
         clear_btn = tk.Label(
             right_group,
             text="🗑️",
@@ -279,10 +316,44 @@ class DishaAssistantWindow:
             fg="#64748b",
             font=("Segoe UI", 10),
             cursor="hand2",
+            padx=3,
         )
-        clear_btn.pack(side="left", padx=(0, 10))
+        clear_btn.pack(side="left", padx=(0, 6))
         clear_btn.bind("<Button-1>", lambda e: self.clear_chat())
+        clear_btn.bind("<Enter>", lambda e: clear_btn.configure(fg="#f59e0b"))
+        clear_btn.bind("<Leave>", lambda e: clear_btn.configure(fg="#64748b"))
 
+        # 4. Minimize Window Button
+        min_btn = tk.Label(
+            right_group,
+            text=" ─ ",
+            bg="#131622",
+            fg="#94a3b8",
+            font=("Segoe UI", 10, "bold"),
+            cursor="hand2",
+            padx=2,
+        )
+        min_btn.pack(side="left", padx=(0, 4))
+        min_btn.bind("<Button-1>", lambda e: self.minimize())
+        min_btn.bind("<Enter>", lambda e: min_btn.configure(fg="#38bdf8"))
+        min_btn.bind("<Leave>", lambda e: min_btn.configure(fg="#94a3b8"))
+
+        # 5. Full Screen / Maximize Toggle Button
+        self.max_btn = tk.Label(
+            right_group,
+            text=" 🗖 ",
+            bg="#131622",
+            fg="#94a3b8",
+            font=("Segoe UI", 10, "bold"),
+            cursor="hand2",
+            padx=2,
+        )
+        self.max_btn.pack(side="left", padx=(0, 4))
+        self.max_btn.bind("<Button-1>", lambda e: self.toggle_maximize())
+        self.max_btn.bind("<Enter>", lambda e: self.max_btn.configure(fg="#38bdf8"))
+        self.max_btn.bind("<Leave>", lambda e: self.max_btn.configure(fg="#94a3b8"))
+
+        # 6. Close / Dismiss Button
         close_btn = tk.Label(
             right_group,
             text=" ✕ ",
@@ -290,6 +361,7 @@ class DishaAssistantWindow:
             fg="#94a3b8",
             font=("Segoe UI", 11, "bold"),
             cursor="hand2",
+            padx=2,
         )
         close_btn.pack(side="left")
         close_btn.bind("<Button-1>", lambda e: self.close())
@@ -669,7 +741,128 @@ class DishaAssistantWindow:
 
         threading.Thread(target=worker, daemon=True).start()
 
+    def open_settings(self):
+        """Open the interactive settings dialog to manage API keys and models."""
+        settings_dialog.open_settings_dialog(self.win)
+
+    def minimize(self):
+        """Minimize assistant window to background tray and floating avatar."""
+        self.win.withdraw()
+
+    def toggle_maximize(self):
+        """Toggle between centered 560x620 floating companion card and full screen."""
+        if not self._is_maximized:
+            self._prev_geom = self.win.geometry()
+            sw = self.win.winfo_screenwidth()
+            sh = self.win.winfo_screenheight()
+            self.win.geometry(f"{sw}x{sh}+0+0")
+            self._is_maximized = True
+            self.max_btn.configure(text=" 🗗 ")
+        else:
+            if self._prev_geom:
+                self.win.geometry(self._prev_geom)
+            else:
+                center_window(self.win, 560, 620)
+            self._is_maximized = False
+            self.max_btn.configure(text=" 🗖 ")
+
+    def toggle_voice_mode(self):
+        """Toggle hands-free continuous back-and-forth voice conversation mode."""
+        if not self._voice_mode_active:
+            self.start_voice_mode()
+        else:
+            self.stop_voice_mode()
+
+    def start_voice_mode(self):
+        """Start hands-free loop: listen -> answer -> speak -> auto-listen again."""
+        if self._voice_mode_active:
+            return
+        self._voice_mode_active = True
+        self.voice_mode_btn.configure(
+            text="🔴 Live Voice: ON",
+            bg="#86198f",
+            fg="#fdf4ff",
+        )
+        self.status_pill.configure(
+            text=" ● LIVE VOICE ",
+            bg="#701a75",
+            fg="#f472b6",
+        )
+        self.append_message("System", "🎙️ Continuous Voice Mode started. Speak naturally, or say 'exit voice mode' to stop.")
+        voice.speak("Voice mode started. I'm listening.", wait=False)
+
+        def _voice_loop():
+            while self._voice_mode_active:
+                self.root.after(0, lambda: self.set_listening_indicator(True))
+                self.root.after(0, lambda: self.set_status("🎤 Listening for speech..."))
+
+                def on_partial(text):
+                    if self._voice_mode_active:
+                        self.root.after(0, lambda: self.set_status(f"🎤 Hearing: {text}"))
+
+                try:
+                    heard = voice.listen(on_partial=on_partial)
+                except Exception:
+                    break
+
+                self.root.after(0, lambda: self.set_listening_indicator(False))
+                if not self._voice_mode_active:
+                    break
+
+                if not heard:
+                    continue
+
+                if is_exit_command(heard) or "stop voice" in heard.lower() or "exit voice" in heard.lower():
+                    self.root.after(0, lambda: (
+                        self.append_message("You", heard),
+                        self.append_message("DISHA", "Exiting voice mode. Have a great day!"),
+                        self.stop_voice_mode()
+                    ))
+                    voice.speak("Exiting voice mode.", wait=True)
+                    break
+
+                self.root.after(0, lambda: (
+                    self.append_message("You", heard),
+                    self.status_pill.configure(text=" ● THINKING... ", bg="#3b0764", fg="#c084fc"),
+                    self.set_status("Thinking...")
+                ))
+
+                streamed = [False]
+
+                def on_stream(chunk_text):
+                    streamed[0] = True
+                    self.root.after(0, lambda: self.append_streaming_chunk(chunk_text))
+
+                answer = route_request(heard, on_chunk=on_stream)
+                if not streamed[0]:
+                    self.root.after(0, lambda: self.append_message("DISHA", answer))
+                else:
+                    self.root.after(0, self.finish_streaming)
+
+                self.root.after(0, lambda: (
+                    self.status_pill.configure(text=" ● LIVE VOICE ", bg="#701a75", fg="#f472b6"),
+                    self.set_status("Speaking reply...")
+                ))
+                # Crucial: wait=True ensures DISHA finishes speaking before listening again!
+                voice.speak(answer, wait=True)
+                self.root.after(0, lambda: self.set_status("Listening for follow-up..."))
+
+        threading.Thread(target=_voice_loop, daemon=True).start()
+
+    def stop_voice_mode(self):
+        """Halt continuous voice loop and restore standard ready state."""
+        self._voice_mode_active = False
+        self.voice_mode_btn.configure(
+            text="🗣️ Voice Mode",
+            bg="#1c1929",
+            fg="#c084fc",
+        )
+        self.set_listening_indicator(False)
+        self.set_status("Ready.")
+
     def close(self):
+        if self._voice_mode_active:
+            self.stop_voice_mode()
         try:
             self.win.withdraw()
         except Exception:

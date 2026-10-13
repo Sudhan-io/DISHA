@@ -16,3 +16,7 @@ fuzzywuzzy>=0.18.0
 python-Levenshtein>=0.21.0
 schedule>=1.2.0
 faster-whisper>=1.0.0
+edge-tts>=6.1.12
+av>=14.0.0
+pycaw>=20240210
+sympy>=1.13.0

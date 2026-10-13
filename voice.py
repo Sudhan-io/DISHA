@@ -138,10 +138,49 @@ def _tts_speak_direct_sapi(text: str) -> bool:
         return False
 
 
+def _tts_speak_neural(text: str) -> bool:
+    """
+    Generate and stream high-quality neural voice in-memory via edge-tts.
+    Zero disk files, zero GPU memory overhead, crystal-clear anime/e-girl voice.
+    """
+    try:
+        import asyncio
+        import io
+        import av
+        import edge_tts
+        neural_voice = getattr(_cfg, "TTS_NEURAL_VOICE", "en-US-AnaNeural")
+
+        async def gen():
+            c = edge_tts.Communicate(text, neural_voice)
+            data = b""
+            async for chunk in c.stream():
+                if chunk["type"] == "audio":
+                    data += chunk["data"]
+            return data
+
+        mp3_data = asyncio.run(gen())
+        if not mp3_data:
+            return False
+
+        container = av.open(io.BytesIO(mp3_data), format="mp3")
+        stream = container.streams.audio[0]
+        sr = stream.codec_context.sample_rate or 24000
+        frames = [f.to_ndarray() for f in container.decode(audio=0)]
+        if not frames:
+            return False
+        audio_np = np.concatenate(frames, axis=1).T
+        sd.play(audio_np, samplerate=sr)
+        sd.wait()
+        return True
+    except Exception as e:
+        _dbg(f"Neural TTS failed ({e}), falling back to SAPI5...")
+        return False
+
+
 def _tts_worker():
     """
     Dedicated worker thread loop for TTS.
-    Tries native Windows SAPI.SpVoice first, falling back to pyttsx3.
+    Tries in-memory neural voice (edge-tts) first, falling back to native SAPI5, then pyttsx3.
     """
     while True:
         item = _tts_queue.get()
@@ -150,7 +189,12 @@ def _tts_worker():
             break
         text, done_event = item
         if TTS_ENABLED and text:
-            success = _tts_speak_direct_sapi(text)
+            tts_engine = getattr(_cfg, "TTS_ENGINE", "neural").lower()
+            success = False
+            if tts_engine == "neural":
+                success = _tts_speak_neural(text)
+            if not success:
+                success = _tts_speak_direct_sapi(text)
             if not success:
                 try:
                     ctypes.windll.ole32.CoInitialize(None)

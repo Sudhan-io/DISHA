@@ -1256,6 +1256,24 @@ def main():
     except Exception:
         pass
 
+    if "--restart" in sys.argv or "-r" in sys.argv:
+        import subprocess
+        import os
+        import time
+        try:
+            res = subprocess.run(
+                ["netstat", "-ano"], capture_output=True, text=True, check=False
+            )
+            for line in res.stdout.splitlines():
+                if f":{_LOCK_PORT} " in line and "LISTENING" in line:
+                    parts = line.strip().split()
+                    pid = parts[-1]
+                    if pid.isdigit() and int(pid) != os.getpid():
+                        subprocess.run(["taskkill", "/F", "/PID", pid], capture_output=True, check=False)
+            time.sleep(0.5)
+        except Exception:
+            pass
+
     root = tk.Tk()
     root.withdraw()
 

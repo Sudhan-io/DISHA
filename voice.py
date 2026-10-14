@@ -18,7 +18,7 @@ import os
 import queue
 import threading
 import time
-from typing import Callable
+from typing import Callable, Optional
 
 import numpy as np
 import pyttsx3
@@ -42,12 +42,81 @@ MAX_LISTEN_SECONDS = getattr(_cfg, "VOICE_MAX_SECONDS", 20.0)
 MIN_AVG_CONF = getattr(_cfg, "VOICE_MIN_AVG_CONF", 0.45)      # average word confidence required (for Vosk)
 SINGLE_WORD_CONF = getattr(_cfg, "VOICE_SINGLE_WORD_CONF", 0.60)  # one-word results must be surer (for Vosk)
 
-_mic_cfg = getattr(_cfg, "MIC_DEVICE", os.getenv("DISHA_MIC_DEVICE", ""))
-if isinstance(_mic_cfg, str):
-    _mic_cfg = _mic_cfg.strip()
-    MIC_DEVICE = int(_mic_cfg) if _mic_cfg.isdigit() else (_mic_cfg or None)
-else:
-    MIC_DEVICE = _mic_cfg
+def _is_device_openable(dev_idx: int) -> bool:
+    try:
+        def _dummy_cb(indata, frames, time_info, status):
+            pass
+        with sd.RawInputStream(
+            samplerate=16000,
+            blocksize=1600,
+            dtype="int16",
+            channels=1,
+            device=dev_idx,
+            callback=_dummy_cb,
+        ):
+            return True
+    except Exception:
+        return False
+
+
+def get_mic_device() -> Optional[int]:
+    """
+    Resolve the best available microphone:
+    1. If DISHA_MIC_DEVICE is configured (as index or name substring), find it if openable.
+    2. Auto-detect: if a connected headset / earbuds / wireless mic exists, prioritize it.
+    3. Auto-detect: prioritize DirectSound microphone array over silent MME.
+    4. Fallback to system default input device (if openable), or first openable input.
+    """
+    cfg = getattr(_cfg, "MIC_DEVICE", os.getenv("DISHA_MIC_DEVICE", ""))
+    devs = sd.query_devices()
+
+    # 1. User-configured device
+    if cfg is not None and str(cfg).strip():
+        s = str(cfg).strip().lower()
+        if s.isdigit():
+            idx = int(s)
+            if 0 <= idx < len(devs) and devs[idx].get("max_input_channels", 0) > 0:
+                if _is_device_openable(idx):
+                    return idx
+        for i, d in enumerate(devs):
+            if d.get("max_input_channels", 0) > 0 and s in d.get("name", "").lower():
+                if _is_device_openable(i):
+                    return i
+
+    # 2. Connected headset / earbuds / wireless mic
+    for i, d in enumerate(devs):
+        if d.get("max_input_channels", 0) > 0:
+            name_low = d.get("name", "").lower()
+            if any(k in name_low for k in ["headset", "buds", "enco", "airpods", "wireless"]):
+                if _is_device_openable(i):
+                    return i
+
+    # 3. DirectSound microphone (higher quality & dynamic range on Windows)
+    for i, d in enumerate(devs):
+        if d.get("max_input_channels", 0) > 0:
+            name_low = d.get("name", "").lower()
+            try:
+                hostapi_name = sd.query_hostapis(d.get("hostapi", 0)).get("name", "").lower()
+            except Exception:
+                hostapi_name = ""
+            if "directsound" in hostapi_name and "mic" in name_low:
+                if _is_device_openable(i):
+                    return i
+
+    # 4. System default input (if openable)
+    def_in = sd.default.device[0]
+    if def_in is not None and def_in >= 0 and _is_device_openable(def_in):
+        return def_in
+
+    # 5. Any openable input
+    for i, d in enumerate(devs):
+        if d.get("max_input_channels", 0) > 0 and _is_device_openable(i):
+            return i
+
+    return None
+
+
+MIC_DEVICE = get_mic_device()
 
 DEBUG = os.getenv("DISHA_VOICE_DEBUG", "0") == "1"
 
@@ -76,6 +145,8 @@ def set_root(root) -> None:
     """Store Tk root reference for thread-safe callbacks."""
     global _root_ref
     _root_ref = root
+    if getattr(_cfg, "STT_ENGINE", "whisper") == "whisper":
+        preload_stt()
 
 
 def _dbg(msg: str) -> None:
@@ -370,38 +441,164 @@ def _clean_result(result: dict) -> str:
 
 
 _whisper_model = None
+_whisper_device = "unloaded"
+_whisper_name = ""
+_whisper_lock = threading.Lock()
+
+_BIG_MODELS = {"large-v3", "large-v3-turbo", "turbo", "distil-large-v3", "distil-large-v3.5",
+               "large-v2", "medium", "medium.en"}
+
+
+def _add_cuda_dll_dirs() -> None:
+    """
+    On Windows, faster-whisper needs cublas64_12.dll / cudnn DLLs. If they were
+    installed with pip (nvidia-cublas-cu12, nvidia-cudnn-cu12) they live in
+    site-packages/nvidia/*/bin, which Windows does not search by default.
+    """
+    if os.name != "nt":
+        return
+    import sys
+    for base in list(sys.path):
+        nv = os.path.join(base, "nvidia")
+        if not os.path.isdir(nv):
+            continue
+        for pkg in os.listdir(nv):
+            bin_dir = os.path.join(nv, pkg, "bin")
+            if os.path.isdir(bin_dir):
+                try:
+                    os.add_dll_directory(bin_dir)
+                except (OSError, AttributeError):
+                    pass
+                os.environ["PATH"] = bin_dir + os.pathsep + os.environ.get("PATH", "")
+
+
+def stt_status() -> str:
+    """Human-readable description of which speech model/device is active."""
+    return f"{_whisper_name or 'not loaded'} on {_whisper_device}"
 
 
 def _get_whisper_model():
-    global _whisper_model
-    if _whisper_model is None:
-        try:
-            from faster_whisper import WhisperModel
-            import ctranslate2
-            model_size = getattr(_cfg, "WHISPER_MODEL_SIZE", "base.en")
-            # Auto-detect CUDA only if CUDA runtime libraries (cublas64_12.dll) are verified working
-            has_cuda = ctranslate2.get_cuda_device_count() > 0
-            loaded = False
-            if has_cuda:
+    global _whisper_model, _whisper_device, _whisper_name
+    with _whisper_lock:
+        if _whisper_model is None:
+            try:
+                _add_cuda_dll_dirs()
+                from faster_whisper import WhisperModel
+                import ctranslate2
+                model_size = getattr(_cfg, "WHISPER_MODEL_SIZE", "small.en")
+                loaded = False
                 try:
-                    test_m = WhisperModel(model_size, device="cuda", compute_type="float16")
-                    # Real inference probe to confirm cuBLAS runtime is functional
-                    dummy = np.zeros(16000, dtype=np.float32)
-                    list(test_m.transcribe(dummy, language="en")[0])
-                    _whisper_model = test_m
-                    loaded = True
-                    _dbg(f"faster-whisper '{model_size}' loaded and verified on CUDA float16!")
-                except Exception as e_cuda:
-                    _dbg(f"CUDA inference verification failed ({e_cuda}); falling back to CPU int8.")
-            
-            if not loaded:
-                _dbg(f"Loading faster-whisper model '{model_size}' on CPU (int8, 6 threads)...")
-                _whisper_model = WhisperModel(model_size, device="cpu", compute_type="int8", cpu_threads=6)
-                _dbg("faster-whisper CPU model loaded successfully!")
-        except Exception as e:
-            _dbg(f"Failed to load faster-whisper: {e}")
-            _whisper_model = False
+                    has_cuda = ctranslate2.get_cuda_device_count() > 0
+                except Exception:
+                    has_cuda = False
+                if has_cuda:
+                    try:
+                        # float16 explicitly: CTranslate2's "auto" picks int8_float16,
+                        # which fails on RTX 50-series (Blackwell) GPUs.
+                        test_m = WhisperModel(model_size, device="cuda", compute_type="float16")
+                        dummy = np.zeros(16000, dtype=np.float32)
+                        list(test_m.transcribe(dummy, language="en")[0])  # real probe
+                        _whisper_model, _whisper_device, _whisper_name = test_m, "GPU (CUDA float16)", model_size
+                        loaded = True
+                    except Exception as e_cuda:
+                        print(f"[DISHA] GPU speech model failed ({e_cuda}); falling back to CPU.")
+                else:
+                    print("[DISHA] No usable CUDA GPU found for speech recognition; using CPU.")
+
+                if not loaded:
+                    cpu_size = "small.en" if model_size in _BIG_MODELS else model_size
+                    _whisper_model = WhisperModel(cpu_size, device="cpu", compute_type="int8", cpu_threads=6)
+                    _whisper_device, _whisper_name = "CPU (int8)", cpu_size
+                print(f"[DISHA] Speech recognition ready: {stt_status()}")
+            except Exception as e:
+                print(f"[DISHA] Failed to load faster-whisper: {e}")
+                _whisper_model = False
     return _whisper_model if _whisper_model is not False else None
+
+
+def preload_stt() -> None:
+    """Load the speech model in the background so your first sentence isn't slow."""
+    threading.Thread(target=_get_whisper_model, daemon=True).start()
+
+
+# --- accuracy helpers -------------------------------------------------------
+
+PHANTOM_PHRASES = {
+    "thanks for watching", "thank you for watching", "please subscribe",
+    "subscribe to my channel", "subtitles by the amara.org community", "you",
+}
+
+
+def _build_prompt() -> str:
+    """
+    A short vocabulary hint. Whisper reads it as 'text that came just before',
+    which makes it far more likely to spell your assistant's name and your
+    app names correctly.
+    """
+    if not getattr(_cfg, "WHISPER_USE_PROMPT", True):
+        return ""
+    name = getattr(_cfg, "APP_NAME", "Disha")
+    words = []
+    try:
+        for k in list(getattr(_cfg, "APP_COMMANDS", {}).keys()):
+            if 2 < len(k) <= 20 and k not in words:
+                words.append(k)
+    except Exception:
+        pass
+    try:
+        import app_launcher
+        apps_dict = getattr(app_launcher, "_discovered_apps", None)
+        if apps_dict is None:
+            apps_dict = app_launcher._discover_installed_apps()
+        for n in list(apps_dict.keys())[:30]:
+            if 2 < len(n) <= 20 and n not in words:
+                words.append(n)
+    except Exception:
+        pass
+    prompt = (f"{name.title()}. Open, close, launch, remind me, volume, screenshot. "
+              + ", ".join(words[:25]) + ".")
+    return prompt[:600]
+
+
+def _transcribe(w_model, audio_np):
+    """Transcribe with VAD, anti-hallucination thresholds, and a segment filter."""
+    prompt = _build_prompt()
+    segments, _info = w_model.transcribe(
+        audio_np,
+        language="en",
+        beam_size=5,
+        temperature=0.0,
+        vad_filter=True,
+        vad_parameters=dict(threshold=0.45, min_silence_duration_ms=500, speech_pad_ms=250),
+        condition_on_previous_text=False,
+        initial_prompt=prompt or None,
+        no_speech_threshold=0.6,
+        log_prob_threshold=-1.0,
+        compression_ratio_threshold=2.4,
+    )
+    kept = []
+    for seg in segments:
+        text = seg.text.strip()
+        if not text:
+            continue
+        if seg.no_speech_prob > 0.6 and seg.avg_logprob < -1.0:
+            _dbg(f"dropped segment (no_speech={seg.no_speech_prob:.2f}, logprob={seg.avg_logprob:.2f}): '{text}'")
+            continue
+        if seg.avg_logprob < -1.6:
+            _dbg(f"dropped low-confidence segment (logprob={seg.avg_logprob:.2f}): '{text}'")
+            continue
+        kept.append(text)
+    result = " ".join(kept).strip()
+
+    low = result.lower().strip(" .!?,")
+    if low in PHANTOM_PHRASES:
+        _dbg(f"dropped phantom phrase: '{result}'")
+        return ""
+    # the model sometimes just echoes the vocabulary hint when it hears nothing
+    if prompt and len(low.split()) >= 3 and low in prompt.lower():
+        _dbg(f"dropped echo of vocabulary prompt: '{result}'")
+        return ""
+    return result
 
 
 def listen(sample_rate: int = 16000, max_seconds: float = None, on_partial=None) -> str:
@@ -449,7 +646,7 @@ def listen(sample_rate: int = 16000, max_seconds: float = None, on_partial=None)
                 blocksize=blocksize,
                 dtype="int16",
                 channels=1,
-                device=MIC_DEVICE,
+                device=get_mic_device(),
                 callback=callback,
             ):
                 while True:
@@ -521,24 +718,15 @@ def listen(sample_rate: int = 16000, max_seconds: float = None, on_partial=None)
                     raw_audio = b"".join(recorded_blocks)
                     audio_np = np.frombuffer(raw_audio, dtype=np.int16).astype(np.float32) / 32768.0
 
-                    # Automatic gain control / peak normalization so Whisper receives clear, crisp input
+                    # Automatic gain control / peak normalization with safe ceiling
                     max_amp = float(np.max(np.abs(audio_np)))
                     if max_amp > 1e-4:
-                        audio_np = audio_np * (0.85 / max_amp)
+                        audio_np = audio_np * min(0.85 / max_amp, 30.0)
 
-                    segments, _ = w_model.transcribe(
-                        audio_np,
-                        language="en",
-                        beam_size=5,
-                        best_of=5,
-                        temperature=0.0,
-                        vad_filter=False,
-                        condition_on_previous_text=False,
-                        initial_prompt=None,
-                    )
-                    whisper_text = " ".join(s.text.strip() for s in segments).strip()
+                    t0 = time.monotonic()
+                    whisper_text = _transcribe(w_model, audio_np)
+                    _dbg(f"faster-whisper ({stt_status()}) {time.monotonic() - t0:.2f}s: '{whisper_text}'")
                     if whisper_text:
-                        _dbg(f"faster-whisper result: '{whisper_text}'")
                         return whisper_text
                     _dbg("faster-whisper detected silence / no speech")
                     return ""
@@ -600,7 +788,7 @@ def listen_for_wake_word(callback: Callable[[], None], stop_event: threading.Eve
                 blocksize=blocksize,
                 dtype="int16",
                 channels=1,
-                device=MIC_DEVICE,
+                device=get_mic_device(),
                 callback=mic_cb,
             ):
                 while not stop_event.is_set() and not is_listening() and not _tts_queue.unfinished_tasks:

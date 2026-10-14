@@ -485,7 +485,7 @@ def _get_whisper_model():
                 _add_cuda_dll_dirs()
                 from faster_whisper import WhisperModel
                 import ctranslate2
-                model_size = getattr(_cfg, "WHISPER_MODEL_SIZE", "small.en")
+                model_size = getattr(_cfg, "WHISPER_MODEL_SIZE", "base.en")
                 loaded = False
                 try:
                     has_cuda = ctranslate2.get_cuda_device_count() > 0
@@ -506,9 +506,10 @@ def _get_whisper_model():
                     print("[DISHA] No usable CUDA GPU found for speech recognition; using CPU.")
 
                 if not loaded:
-                    cpu_size = "small.en" if model_size in _BIG_MODELS else model_size
-                    _whisper_model = WhisperModel(cpu_size, device="cpu", compute_type="int8", cpu_threads=6)
-                    _whisper_device, _whisper_name = "CPU (int8)", cpu_size
+                    cpu_threads = int(os.getenv("DISHA_WHISPER_THREADS", str(max(4, min(8, (os.cpu_count() or 4) - 2)))))
+                    cpu_size = "base.en" if model_size in _BIG_MODELS else model_size
+                    _whisper_model = WhisperModel(cpu_size, device="cpu", compute_type="int8", cpu_threads=cpu_threads)
+                    _whisper_device, _whisper_name = f"CPU (int8, {cpu_threads} threads)", cpu_size
                 print(f"[DISHA] Speech recognition ready: {stt_status()}")
             except Exception as e:
                 print(f"[DISHA] Failed to load faster-whisper: {e}")
@@ -529,13 +530,20 @@ PHANTOM_PHRASES = {
 }
 
 
+_prompt_cache = None
+
+
 def _build_prompt() -> str:
     """
     A short vocabulary hint. Whisper reads it as 'text that came just before',
     which makes it far more likely to spell your assistant's name and your
-    app names correctly.
+    app names correctly. Cached so it executes with zero overhead.
     """
+    global _prompt_cache
+    if _prompt_cache is not None:
+        return _prompt_cache
     if not getattr(_cfg, "WHISPER_USE_PROMPT", True):
+        _prompt_cache = ""
         return ""
     name = getattr(_cfg, "APP_NAME", "Disha")
     words = []
@@ -557,19 +565,21 @@ def _build_prompt() -> str:
         pass
     prompt = (f"{name.title()}. Open, close, launch, remind me, volume, screenshot. "
               + ", ".join(words[:25]) + ".")
-    return prompt[:600]
+    _prompt_cache = prompt[:600]
+    return _prompt_cache
 
 
 def _transcribe(w_model, audio_np):
-    """Transcribe with VAD, anti-hallucination thresholds, and a segment filter."""
+    """Transcribe with low-latency VAD, anti-hallucination thresholds, and greedy decoding."""
     prompt = _build_prompt()
+    beam_size = getattr(_cfg, "WHISPER_BEAM_SIZE", 1)
     segments, _info = w_model.transcribe(
         audio_np,
         language="en",
-        beam_size=5,
+        beam_size=beam_size,
         temperature=0.0,
         vad_filter=True,
-        vad_parameters=dict(threshold=0.45, min_silence_duration_ms=500, speech_pad_ms=250),
+        vad_parameters=dict(threshold=0.45, min_silence_duration_ms=300, speech_pad_ms=180),
         condition_on_previous_text=False,
         initial_prompt=prompt or None,
         no_speech_threshold=0.6,
@@ -632,7 +642,7 @@ def listen(sample_rate: int = 16000, max_seconds: float = None, on_partial=None)
             audio_queue.put(bytes(indata))
 
         import collections
-        pre_roll = collections.deque(maxlen=15)  # 1500ms pre-roll buffer so initial casual words are never clipped
+        pre_roll = collections.deque(maxlen=4)  # 400ms pre-roll buffer catches initial consonants without feeding dead air
         parts = []
         recorded_blocks = []
         speech_blocks = 0
@@ -699,7 +709,8 @@ def listen(sample_rate: int = 16000, max_seconds: float = None, on_partial=None)
                             on_partial(" ".join(parts + [p]).strip())
 
                     # Stop once you were speaking and have been quiet long enough
-                    if started and last_speech_t and (now - last_speech_t) >= SILENCE_STOP_SECONDS:
+                    silence_limit = getattr(_cfg, "SILENCE_STOP_SECONDS", SILENCE_STOP_SECONDS)
+                    if started and last_speech_t and (now - last_speech_t) >= silence_limit:
                         break
         except Exception as e:
             raise RuntimeError(f"Microphone error: {e}")

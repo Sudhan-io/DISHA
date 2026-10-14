@@ -366,6 +366,14 @@ def _discover_installed_apps() -> dict[str, str]:
         Path(os.environ.get("PUBLIC", r"C:\Users\Public")) / "Desktop",
     ]
 
+    # Helper to resolve shortcut target via WScript.Shell
+    wscript = None
+    try:
+        import win32com.client
+        wscript = win32com.client.Dispatch("WScript.Shell")
+    except Exception:
+        pass
+
     for s_dir in search_dirs:
         if s_dir and s_dir.exists():
             try:
@@ -373,11 +381,52 @@ def _discover_installed_apps() -> dict[str, str]:
                     stem = lnk.stem.lower().strip()
                     if "uninstall" in stem or "remove" in stem:
                         continue
-                    resolved = str(lnk.resolve())
-                    apps[stem] = resolved
+                    lnk_path = str(lnk.resolve())
+                    apps[stem] = lnk_path
+
+                    # Also inspect real target .exe if possible
+                    target_exe = None
+                    if wscript:
+                        try:
+                            sc = wscript.CreateShortcut(lnk_path)
+                            if sc.TargetPath and os.path.exists(sc.TargetPath):
+                                target_exe = sc.TargetPath
+                                exe_name = Path(target_exe).name.lower()
+                                exe_stem = Path(target_exe).stem.lower()
+                                apps[exe_stem] = lnk_path
+                                # Register process alias for closing
+                                if stem not in PROCESS_ALIASES:
+                                    PROCESS_ALIASES[stem] = [exe_name]
+                        except Exception:
+                            pass
+
+                    # 1. Clean parenthesized noise: "Sekiro (ArtBook and OST)" -> "Sekiro"
                     clean_stem = re.sub(r"\s*\([^)]*\)", "", stem).strip()
-                    if clean_stem and clean_stem not in apps:
-                        apps[clean_stem] = resolved
+                    if clean_stem:
+                        apps[clean_stem] = lnk_path
+
+                    # 2. Strip technical bitness: "PotPlayer 64 bit" -> "PotPlayer"
+                    no_bits = re.sub(r"\s*(?:64[\s-]*bit|32[\s-]*bit|x64|x86|\(x64\)|\(x86\))\b", "", clean_stem, flags=re.I).strip()
+                    if no_bits:
+                        apps[no_bits] = lnk_path
+
+                    # 3. Strip generic suffixes: "Epic Games Launcher" -> "Epic Games"
+                    no_launcher = re.sub(r"\s*(?:launcher|client|edition|game|app)\b", "", no_bits, flags=re.I).strip()
+                    if no_launcher:
+                        apps[no_launcher] = lnk_path
+                        if no_launcher == "epic games":
+                            apps["epic"] = lnk_path
+
+                    # 4. Split subtitles after hyphen / colon: "Sekiro - Shadows Die Twice" -> "Sekiro"
+                    main_title = re.split(r"[-:–—]", no_launcher)[0].strip()
+                    if main_title and len(main_title) >= 3:
+                        apps[main_title] = lnk_path
+
+                    # 5. Common multi-word stems: "MSI Afterburner" -> "Afterburner"
+                    if " " in no_bits:
+                        last_word = no_bits.split()[-1]
+                        if len(last_word) >= 4 and last_word not in apps:
+                            apps[last_word] = lnk_path
             except Exception:
                 pass
 
@@ -418,7 +467,8 @@ def _discover_installed_apps() -> dict[str, str]:
 
 def _launch_target(target: str) -> bool:
     """
-    Launch target via native Windows ShellExecute (os.startfile) with fallback to subprocess.
+    Launch target via native Windows ShellExecute (os.startfile) or cmd.exe start with elevation fallback.
+    Guarantees elevated apps (e.g. MSI Afterburner), shortcuts (.lnk), URLs, and protocols launch reliably.
     """
     try:
         os.startfile(target)
@@ -426,16 +476,16 @@ def _launch_target(target: str) -> bool:
     except Exception:
         pass
 
-    # Subprocess fallback
+    # Subprocess fallback via cmd /c start (handles UAC elevation prompts & .lnk execution)
     try:
-        if target.startswith("http://") or target.startswith("https://") or (":" in target and not Path(target).exists()):
-            subprocess.Popen(f'start "" "{target}"', shell=True)
-            return True
-        elif Path(target).exists():
+        subprocess.Popen(f'cmd.exe /c start "" "{target}"', shell=True)
+        return True
+    except Exception:
+        pass
+
+    try:
+        if Path(target).exists():
             subprocess.Popen([target], shell=False)
-            return True
-        else:
-            subprocess.Popen(f'start "" "{target}"', shell=True)
             return True
     except Exception:
         pass
@@ -538,11 +588,20 @@ def _launch_app(app_name: str) -> Optional[str]:
         if _launch_target(cmd):
             return f"Opening {app_name}."
 
-    # 7. Fuzzy matching against all candidate keys
+    # 7. Fuzzy matching against all candidate keys (token_set_ratio + ratio)
     all_candidates = list(discovered.keys()) + list(COMMON_WEBSITES.keys()) + list(BUILTIN_PROTOCOLS.keys()) + list(APP_ALIASES.keys())
     if all_candidates:
-        match, score = process.extractOne(clean_name, all_candidates, scorer=fuzz.ratio)
-        if score >= 70:
+        # Check token_set_ratio first (e.g. "potplayer" matches "potplayer 64 bit", "epic" matches "epic games launcher")
+        best_token = process.extractOne(clean_name, all_candidates, scorer=fuzz.token_set_ratio)
+        best_ratio = process.extractOne(clean_name, all_candidates, scorer=fuzz.ratio)
+
+        match = None
+        if best_token and best_token[1] >= 80:
+            match = best_token[0]
+        elif best_ratio and best_ratio[1] >= 70:
+            match = best_ratio[0]
+
+        if match:
             if match in BUILTIN_PROTOCOLS and _launch_target(BUILTIN_PROTOCOLS[match]):
                 return f"Opening {match}."
             if match in COMMON_WEBSITES and _launch_target(COMMON_WEBSITES[match]):

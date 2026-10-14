@@ -315,13 +315,102 @@ class DishaAssistantWindow:
         self.voice_badge.bind("<Enter>", lambda e: self.voice_badge.configure(bg="#312e81"))
         self.voice_badge.bind("<Leave>", lambda e: self.voice_badge.configure(bg="#1e1b4b"))
 
-        # Window Controls & Tools
-        right_group = tk.Frame(header, bg="#131622")
-        right_group.pack(side="right", padx=10)
+        # ── Top-Right Header Controls ──────────────────────────────────────────
+        # 1. Window Caption Buttons (Minimize, Maximize/Restore, Close)
+        caption_controls = tk.Frame(header, bg="#131622")
+        caption_controls.pack(side="right", fill="y", padx=0, pady=0)
 
-        # 1. Continuous Voice Mode Toggle Chip
+        # Close Button (✕)
+        self.close_btn = tk.Label(
+            caption_controls,
+            text=" ✕ ",
+            bg="#131622",
+            fg="#94a3b8",
+            font=("Segoe UI", 10, "bold"),
+            cursor="hand2",
+            padx=10,
+            pady=8,
+        )
+        self.close_btn.pack(side="right", fill="y")
+        self.close_btn.bind("<Button-1>", lambda e: self.close())
+        self.close_btn.bind("<Enter>", lambda e: self.close_btn.configure(bg="#e11d48", fg="#ffffff"))
+        self.close_btn.bind("<Leave>", lambda e: self.close_btn.configure(bg="#131622", fg="#94a3b8"))
+
+        # Maximize / Restore Button (🗖 / 🗗)
+        self.max_btn = tk.Label(
+            caption_controls,
+            text=" 🗖 ",
+            bg="#131622",
+            fg="#94a3b8",
+            font=("Segoe UI", 9, "bold"),
+            cursor="hand2",
+            padx=10,
+            pady=8,
+        )
+        self.max_btn.pack(side="right", fill="y")
+        self.max_btn.bind("<Button-1>", lambda e: self.toggle_maximize())
+        self.max_btn.bind("<Enter>", lambda e: self.max_btn.configure(bg="#262b3d", fg="#f8fafc"))
+        self.max_btn.bind("<Leave>", lambda e: self.max_btn.configure(bg="#131622", fg="#94a3b8"))
+
+        # Minimize Button (─)
+        self.min_btn = tk.Label(
+            caption_controls,
+            text=" ─ ",
+            bg="#131622",
+            fg="#94a3b8",
+            font=("Segoe UI", 9, "bold"),
+            cursor="hand2",
+            padx=10,
+            pady=8,
+        )
+        self.min_btn.pack(side="right", fill="y")
+        self.min_btn.bind("<Button-1>", lambda e: self.minimize())
+        self.min_btn.bind("<Enter>", lambda e: self.min_btn.configure(bg="#262b3d", fg="#f8fafc"))
+        self.min_btn.bind("<Leave>", lambda e: self.min_btn.configure(bg="#131622", fg="#94a3b8"))
+
+        # Divider between tools and caption controls
+        divider = tk.Frame(header, bg="#20263b", width=1, height=18)
+        divider.pack(side="right", padx=(8, 6), pady=8)
+
+        # 2. Tools (Clear chat, Settings, Voice mode)
+        tools_frame = tk.Frame(header, bg="#131622")
+        tools_frame.pack(side="right", padx=(0, 4))
+
+        # Clear Chat History Button
+        clear_btn = tk.Label(
+            tools_frame,
+            text="🗑️",
+            bg="#131622",
+            fg="#64748b",
+            font=("Segoe UI", 10),
+            cursor="hand2",
+            padx=4,
+            pady=6,
+        )
+        clear_btn.pack(side="right", padx=(0, 4))
+        clear_btn.bind("<Button-1>", lambda e: self.clear_chat())
+        clear_btn.bind("<Enter>", lambda e: clear_btn.configure(fg="#f59e0b"))
+        clear_btn.bind("<Leave>", lambda e: clear_btn.configure(fg="#64748b"))
+
+        # Settings Dialog Button
+        settings_btn = tk.Label(
+            tools_frame,
+            text="⚙️",
+            bg="#131622",
+            fg="#94a3b8",
+            font=("Segoe UI", 10),
+            cursor="hand2",
+            padx=4,
+            pady=6,
+        )
+        settings_btn.pack(side="right", padx=(0, 4))
+        settings_btn.bind("<Button-1>", lambda e: self.open_settings())
+        settings_btn.bind("<Enter>", lambda e: settings_btn.configure(fg="#38bdf8"))
+        settings_btn.bind("<Leave>", lambda e: settings_btn.configure(fg="#94a3b8"))
+
+        # Continuous Voice Mode Toggle Chip
         self.voice_mode_btn = tk.Label(
-            right_group,
+            tools_frame,
             text="🗣️ Voice Mode",
             bg="#1c1929",
             fg="#c084fc",
@@ -331,85 +420,10 @@ class DishaAssistantWindow:
             cursor="hand2",
             bd=0,
         )
-        self.voice_mode_btn.pack(side="left", padx=(0, 8))
+        self.voice_mode_btn.pack(side="right", padx=(0, 6))
         self.voice_mode_btn.bind("<Button-1>", lambda e: self.toggle_voice_mode())
         self.voice_mode_btn.bind("<Enter>", lambda e: self.voice_mode_btn.configure(bg="#2e1065") if not self._voice_mode_active else None)
         self.voice_mode_btn.bind("<Leave>", lambda e: self.voice_mode_btn.configure(bg="#1c1929") if not self._voice_mode_active else None)
-
-        # 2. Settings Dialog Button
-        settings_btn = tk.Label(
-            right_group,
-            text="⚙️",
-            bg="#131622",
-            fg="#94a3b8",
-            font=("Segoe UI", 10),
-            cursor="hand2",
-            padx=3,
-        )
-        settings_btn.pack(side="left", padx=(0, 6))
-        settings_btn.bind("<Button-1>", lambda e: self.open_settings())
-        settings_btn.bind("<Enter>", lambda e: settings_btn.configure(fg="#38bdf8"))
-        settings_btn.bind("<Leave>", lambda e: settings_btn.configure(fg="#94a3b8"))
-
-        # 3. Clear Chat History
-        clear_btn = tk.Label(
-            right_group,
-            text="🗑️",
-            bg="#131622",
-            fg="#64748b",
-            font=("Segoe UI", 10),
-            cursor="hand2",
-            padx=3,
-        )
-        clear_btn.pack(side="left", padx=(0, 6))
-        clear_btn.bind("<Button-1>", lambda e: self.clear_chat())
-        clear_btn.bind("<Enter>", lambda e: clear_btn.configure(fg="#f59e0b"))
-        clear_btn.bind("<Leave>", lambda e: clear_btn.configure(fg="#64748b"))
-
-        # 4. Minimize Window Button
-        min_btn = tk.Label(
-            right_group,
-            text=" ─ ",
-            bg="#131622",
-            fg="#94a3b8",
-            font=("Segoe UI", 10, "bold"),
-            cursor="hand2",
-            padx=2,
-        )
-        min_btn.pack(side="left", padx=(0, 4))
-        min_btn.bind("<Button-1>", lambda e: self.minimize())
-        min_btn.bind("<Enter>", lambda e: min_btn.configure(fg="#38bdf8"))
-        min_btn.bind("<Leave>", lambda e: min_btn.configure(fg="#94a3b8"))
-
-        # 5. Full Screen / Maximize Toggle Button
-        self.max_btn = tk.Label(
-            right_group,
-            text=" 🗖 ",
-            bg="#131622",
-            fg="#94a3b8",
-            font=("Segoe UI", 10, "bold"),
-            cursor="hand2",
-            padx=2,
-        )
-        self.max_btn.pack(side="left", padx=(0, 4))
-        self.max_btn.bind("<Button-1>", lambda e: self.toggle_maximize())
-        self.max_btn.bind("<Enter>", lambda e: self.max_btn.configure(fg="#38bdf8"))
-        self.max_btn.bind("<Leave>", lambda e: self.max_btn.configure(fg="#94a3b8"))
-
-        # 6. Close / Dismiss Button
-        close_btn = tk.Label(
-            right_group,
-            text=" ✕ ",
-            bg="#131622",
-            fg="#94a3b8",
-            font=("Segoe UI", 11, "bold"),
-            cursor="hand2",
-            padx=2,
-        )
-        close_btn.pack(side="left")
-        close_btn.bind("<Button-1>", lambda e: self.close())
-        close_btn.bind("<Enter>", lambda e: close_btn.configure(fg="#f43f5e"))
-        close_btn.bind("<Leave>", lambda e: close_btn.configure(fg="#94a3b8"))
 
         # Drag bindings
         for widget in (header, left_group, brand_frame, title_lbl, tag_lbl):
@@ -927,6 +941,39 @@ class DishaAssistantWindow:
         self.set_listening_indicator(False)
         self.set_status("Ready.")
 
+    def minimize(self):
+        """Minimize companion window cleanly to system tray."""
+        try:
+            self.win.withdraw()
+        except Exception:
+            pass
+
+    def toggle_maximize(self):
+        """Toggle between centered companion window and maximized desktop work area."""
+        if not self._is_maximized:
+            self._prev_geom = (
+                self.win.winfo_x(),
+                self.win.winfo_y(),
+                self.win.winfo_width(),
+                self.win.winfo_height(),
+            )
+            sw = self.win.winfo_screenwidth()
+            sh = self.win.winfo_screenheight()
+            # Maximize leaving space for taskbar
+            self.win.geometry(f"{sw}x{sh - 48}+0+0")
+            self._is_maximized = True
+            if hasattr(self, "max_btn"):
+                self.max_btn.configure(text=" 🗗 ")
+        else:
+            if self._prev_geom and self._prev_geom[2] > 100:
+                x, y, w, h = self._prev_geom
+                self.win.geometry(f"{w}x{h}+{x}+{y}")
+            else:
+                center_window(self.win, 560, 620)
+            self._is_maximized = False
+            if hasattr(self, "max_btn"):
+                self.max_btn.configure(text=" 🗖 ")
+
     def close(self):
         voice.cancel_listen()
         if self._voice_mode_active:
@@ -1156,12 +1203,16 @@ def start_hotkey_listener(root):
 # ---------------------------------------------------------------------------
 
 def _fire_reminder(msg: str, root):
-    """Called when scheduler triggers a reminder."""
+    """Called when scheduler triggers an alarm or reminder."""
     def show():
         open_or_focus_assistant(root, mode="text")
+        is_alarm = "alarm" in msg.lower() or "timer" in msg.lower()
+        tag = "⏰ ALARM" if is_alarm else "🔔 REMINDER"
         if _assistant_window:
-            _assistant_window.append_message("System", f"⏰ Reminder: {msg}")
-        voice.speak(f"Reminder: {msg}", wait=False)
+            _assistant_window.append_message("System", f"{tag}: {msg}")
+            _assistant_window.set_status(f"{tag}: {msg}")
+        speech_text = f"Alarm! {msg}" if is_alarm else f"Reminder: {msg}"
+        voice.speak(speech_text, wait=False)
     root.after(0, show)
 
 

@@ -34,8 +34,8 @@ vosk.SetLogLevel(-1)  # quiet Vosk's default console spam
 # ---------------------------------------------------------------------------
 # Tunables (optional: define any of these in config.py to override)
 # ---------------------------------------------------------------------------
-MIN_RMS = getattr(_cfg, "VOICE_MIN_RMS", 120.0)               # absolute loudness floor (int16 RMS)
-NOISE_MARGIN = getattr(_cfg, "VOICE_NOISE_MARGIN", 1.8)       # speech must be this x louder than room noise
+MIN_RMS = getattr(_cfg, "VOICE_MIN_RMS", 80.0)                # absolute loudness floor (sensitive to soft casual speech)
+NOISE_MARGIN = getattr(_cfg, "VOICE_NOISE_MARGIN", 1.4)        # speech must be this x louder than room noise
 MIN_SPEECH_SECONDS = getattr(_cfg, "VOICE_MIN_SPEECH_SECONDS", 0.2)
 NO_SPEECH_TIMEOUT = getattr(_cfg, "VOICE_NO_SPEECH_TIMEOUT", 5.0)   # give up if you never speak
 MAX_LISTEN_SECONDS = getattr(_cfg, "VOICE_MAX_SECONDS", 20.0)
@@ -427,7 +427,7 @@ def listen(sample_rate: int = 16000, max_seconds: float = None, on_partial=None)
             audio_queue.put(bytes(indata))
 
         import collections
-        pre_roll = collections.deque(maxlen=6)  # 600ms pre-roll buffer so initial words are never clipped
+        pre_roll = collections.deque(maxlen=12)  # 1200ms pre-roll buffer so initial casual words are never clipped
         parts = []
         recorded_blocks = []
         speech_blocks = 0
@@ -515,11 +515,12 @@ def listen(sample_rate: int = 16000, max_seconds: float = None, on_partial=None)
                     segments, _ = w_model.transcribe(
                         audio_np,
                         language="en",
-                        beam_size=2,
-                        vad_filter=True,
-                        vad_parameters=dict(min_silence_duration_ms=400),
+                        beam_size=5,
+                        best_of=5,
+                        temperature=0.0,
+                        vad_filter=False,
                         condition_on_previous_text=False,
-                        initial_prompt="Hey DISHA, Sudhan, open Chrome, Spotify, what's on my screen, battery, reminders.",
+                        initial_prompt=None,
                     )
                     whisper_text = " ".join(s.text.strip() for s in segments).strip()
                     if whisper_text:

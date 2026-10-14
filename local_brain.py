@@ -268,8 +268,8 @@ def _ans_get_name(m, text: str) -> str:
 _PATTERNS: list[tuple[str, Callable]] = [
     (r"(?:my name is|call me|you can call me|i am called)\s+([A-Za-z]+(?:\s+[A-Za-z]+)?)", _ans_set_name),
     (r"\b(?:what is|what's|do you know)\s+(?:my|my own)\s+name\b|\bwho am i\b", _ans_get_name),
-    (r"\btime\b|\bwhat time\b|\bcurrent time\b", _ans_time),
-    (r"\bdate\b|\btoday\b|\bwhat day\b|\bday today\b", _ans_date),
+    (r"\b(?:what time is it|what(?:'s| is) (?:the )?time|tell me the time|current time)\b|^\s*time\s*$", _ans_time),
+    (r"\b(?:what(?:'s| is) (?:the )?date|what is today(?:'s)? date|what day is (?:it|today))\b|^\s*(?:date|today)\s*$", _ans_date),
     (r"\bbattery\b|\bcharge\b", _ans_battery),
     (r"\bcpu\b|\bprocessor\b", _ans_cpu),
     (r"\bgpu\b|\bgraphics\b|\bvram\b|\bnvidia\b|\brtx\b", _ans_gpu),

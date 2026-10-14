@@ -127,6 +127,8 @@ DEVICE_ID_FILE     = BASE_DIR / "device_id.txt"
 APP_COMMANDS: dict[str, str] = {
     "vscode": "code", "vs code": "code", "visual studio code": "code",
     "chrome": "chrome", "google chrome": "chrome",
+    "brave": "brave", "brave browser": "brave",
+    "edge": "msedge", "microsoft edge": "msedge", "msedge": "msedge",
     "firefox": "firefox",
     "notepad": "notepad", "notepad++": "notepad++",
     "calculator": "calc", "calc": "calc",

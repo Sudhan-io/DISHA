@@ -253,14 +253,376 @@ SYSTEM_PATTERNS: list[tuple[str, Callable]] = [
 ]
 
 
+BUILTIN_PROTOCOLS: dict[str, str] = {
+    "calculator": "calculator:",
+    "calc": "calculator:",
+    "paint": "ms-paint:",
+    "mspaint": "ms-paint:",
+    "settings": "ms-settings:",
+    "windows settings": "ms-settings:",
+    "bluetooth": "ms-settings:bluetooth",
+    "bluetooth settings": "ms-settings:bluetooth",
+    "wifi": "ms-settings:network-wifi",
+    "wifi settings": "ms-settings:network-wifi",
+    "network settings": "ms-settings:network",
+    "sound settings": "ms-settings:sound",
+    "display settings": "ms-settings:display",
+    "store": "ms-windows-store:",
+    "windows store": "ms-windows-store:",
+    "microsoft store": "ms-windows-store:",
+    "spotify": "spotify:",
+}
+
+COMMON_WEBSITES: dict[str, str] = {
+    "youtube": "https://www.youtube.com",
+    "google": "https://www.google.com",
+    "github": "https://www.github.com",
+    "chatgpt": "https://chatgpt.com",
+    "chat gpt": "https://chatgpt.com",
+    "gmail": "https://mail.google.com",
+    "reddit": "https://www.reddit.com",
+    "twitter": "https://x.com",
+    "x": "https://x.com",
+    "netflix": "https://www.netflix.com",
+    "amazon": "https://www.amazon.com",
+    "instagram": "https://www.instagram.com",
+    "linkedin": "https://www.linkedin.com",
+    "whatsapp": "https://web.whatsapp.com",
+    "leetcode": "https://leetcode.com",
+    "stackoverflow": "https://stackoverflow.com",
+    "stack overflow": "https://stackoverflow.com",
+    "wikipedia": "https://www.wikipedia.org",
+    "browser": "https://www.google.com",
+    "web browser": "https://www.google.com",
+}
+
+APP_ALIASES: dict[str, str] = {
+    "vscode": "code",
+    "vs code": "code",
+    "visual studio code": "code",
+    "google chrome": "chrome",
+    "command prompt": "cmd",
+    "windows terminal": "wt",
+    "terminal": "wt",
+    "file explorer": "explorer",
+    "files": "explorer",
+    "task manager": "taskmgr",
+    "microsoft edge": "msedge",
+    "edge": "msedge",
+    "brave browser": "brave",
+}
+
+PROCESS_ALIASES: dict[str, list[str]] = {
+    "calculator": ["CalculatorApp.exe", "calc.exe"],
+    "calc": ["CalculatorApp.exe", "calc.exe"],
+    "notepad": ["Notepad.exe", "notepad.exe"],
+    "paint": ["mspaint.exe", "PaintApp.exe"],
+    "terminal": ["WindowsTerminal.exe", "wt.exe"],
+    "windows terminal": ["WindowsTerminal.exe", "wt.exe"],
+    "command prompt": ["cmd.exe"],
+    "cmd": ["cmd.exe"],
+    "vscode": ["Code.exe"],
+    "vs code": ["Code.exe"],
+    "visual studio code": ["Code.exe"],
+    "code": ["Code.exe"],
+    "chrome": ["chrome.exe"],
+    "google chrome": ["chrome.exe"],
+    "brave": ["brave.exe"],
+    "edge": ["msedge.exe"],
+    "microsoft edge": ["msedge.exe"],
+    "discord": ["Discord.exe"],
+    "spotify": ["Spotify.exe"],
+    "word": ["WINWORD.EXE"],
+    "excel": ["EXCEL.EXE"],
+    "powerpoint": ["POWERPNT.EXE"],
+}
+
+PROTECTED_PROCESSES = {
+    "explorer.exe", "svchost.exe", "csrss.exe", "lsass.exe",
+    "smss.exe", "winlogon.exe", "services.exe", "system.exe", "idle.exe"
+}
+
+
+def _discover_installed_apps() -> dict[str, str]:
+    """
+    Comprehensive app discovery across Windows:
+    1. Start Menu shortcuts (.lnk) in ProgramData and AppData
+    2. Desktop shortcuts (.lnk) in User and Public Desktop
+    3. Windows Registry App Paths (HKLM and HKCU)
+    4. System PATH fallback binaries
+    Returns dictionary mapping lowercase app name -> launchable target.
+    """
+    global _discovered_apps
+    if _discovered_apps is not None:
+        return _discovered_apps
+
+    apps: dict[str, str] = {}
+
+    # 1. Start menu & Desktop shortcuts (.lnk)
+    search_dirs = [
+        Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData")) / "Microsoft" / "Windows" / "Start Menu" / "Programs",
+        Path(os.environ.get("APPDATA", "")) / "Microsoft" / "Windows" / "Start Menu" / "Programs" if os.environ.get("APPDATA") else None,
+        Path(os.environ.get("USERPROFILE", "")) / "Desktop" if os.environ.get("USERPROFILE") else None,
+        Path(os.environ.get("PUBLIC", r"C:\Users\Public")) / "Desktop",
+    ]
+
+    for s_dir in search_dirs:
+        if s_dir and s_dir.exists():
+            try:
+                for lnk in s_dir.rglob("*.lnk"):
+                    stem = lnk.stem.lower().strip()
+                    if "uninstall" in stem or "remove" in stem:
+                        continue
+                    resolved = str(lnk.resolve())
+                    apps[stem] = resolved
+                    clean_stem = re.sub(r"\s*\([^)]*\)", "", stem).strip()
+                    if clean_stem and clean_stem not in apps:
+                        apps[clean_stem] = resolved
+            except Exception:
+                pass
+
+    # 2. Windows Registry App Paths (HKCU and HKLM)
+    try:
+        import winreg
+        for root in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+            try:
+                with winreg.OpenKey(root, r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths") as key:
+                    subkeys, _, _ = winreg.QueryInfoKey(key)
+                    for i in range(subkeys):
+                        name = winreg.EnumKey(key, i)
+                        try:
+                            with winreg.OpenKey(key, name) as subkey:
+                                val, _ = winreg.QueryValueEx(subkey, "")
+                                if val and (os.path.exists(val) or Path(val).exists()):
+                                    clean = name.lower().strip()
+                                    apps[clean] = val
+                                    if clean.endswith(".exe"):
+                                        apps[clean[:-4]] = val
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # 3. System PATH fallback binaries
+    import shutil
+    for sys_bin in ("calc", "notepad", "cmd", "explorer", "taskmgr", "wt", "code", "powershell"):
+        which = shutil.which(sys_bin) or shutil.which(f"{sys_bin}.exe")
+        if which and sys_bin not in apps:
+            apps[sys_bin] = which
+
+    _discovered_apps = apps
+    return _discovered_apps
+
+
+def _launch_target(target: str) -> bool:
+    """
+    Launch target via native Windows ShellExecute (os.startfile) with fallback to subprocess.
+    """
+    try:
+        os.startfile(target)
+        return True
+    except Exception:
+        pass
+
+    # Subprocess fallback
+    try:
+        if target.startswith("http://") or target.startswith("https://") or (":" in target and not Path(target).exists()):
+            subprocess.Popen(f'start "" "{target}"', shell=True)
+            return True
+        elif Path(target).exists():
+            subprocess.Popen([target], shell=False)
+            return True
+        else:
+            subprocess.Popen(f'start "" "{target}"', shell=True)
+            return True
+    except Exception:
+        pass
+
+    return False
+
+
+def _extract_app_action(text: str) -> Optional[tuple[str, str]]:
+    """
+    Extract action ('open' or 'close') and target app from natural phrasing.
+    Supports prefixes like 'can you open', 'please open', 'open up', 'fire up', etc.
+    """
+    cleaned = text.strip().lower().rstrip(".!?")
+
+    # 1. Open action pattern
+    open_regex = re.compile(
+        r"^(?:please\s+|can\s+you\s+|could\s+you\s+|would\s+you\s+|hey\s+disha\s+|disha\s+)?"
+        r"(?:open|launch|start|run|bring\s+up|fire\s+up)"
+        r"(?:\s+up|\s+the|\s+my|\s+app|\s+application)*\s+"
+        r"(.+?)"
+        r"(?:\s+please|\s+for\s+me|\s+now|\s+app|\s+application)*$",
+        re.IGNORECASE
+    )
+    m_open = open_regex.match(cleaned)
+    if m_open:
+        target = m_open.group(1).strip()
+        target = re.sub(r"^(?:the|my|up|app)\s+", "", target).strip()
+        if target:
+            return ("open", target)
+
+    # 2. Close action pattern
+    close_regex = re.compile(
+        r"^(?:please\s+|can\s+you\s+|could\s+you\s+|would\s+you\s+|hey\s+disha\s+|disha\s+)?"
+        r"(?:close|quit|kill|exit|terminate|shut\s+down)"
+        r"(?:\s+the|\s+my|\s+app|\s+application)*\s+"
+        r"(.+?)"
+        r"(?:\s+please|\s+for\s+me|\s+now|\s+app|\s+application)*$",
+        re.IGNORECASE
+    )
+    m_close = close_regex.match(cleaned)
+    if m_close:
+        target = m_close.group(1).strip()
+        target = re.sub(r"^(?:the|my|app)\s+", "", target).strip()
+        if target:
+            return ("close", target)
+
+    return None
+
+
+def _launch_app(app_name: str) -> Optional[str]:
+    """
+    Resolve and launch an application, shortcut, system protocol, or website.
+    """
+    clean_name = app_name.strip().lower().rstrip(".!?")
+    if not clean_name:
+        return None
+
+    # 1. Direct Web URLs
+    if clean_name.startswith("http://") or clean_name.startswith("https://"):
+        if _launch_target(clean_name):
+            return f"Opening {clean_name}."
+    elif clean_name.startswith("www.") or any(clean_name.endswith(tld) for tld in (".com", ".org", ".net", ".io", ".co", ".app", ".dev", ".edu", ".in")):
+        url = f"https://{clean_name}"
+        if _launch_target(url):
+            return f"Opening {clean_name}."
+
+    # 2. Built-in Protocols (Calculator, Settings, Paint, Spotify)
+    proto = BUILTIN_PROTOCOLS.get(clean_name)
+    if proto and _launch_target(proto):
+        return f"Opening {app_name}."
+
+    # 3. Common Websites
+    site = COMMON_WEBSITES.get(clean_name)
+    if site and _launch_target(site):
+        return f"Opening {clean_name.title()}."
+
+    # 4. Aliased match
+    aliased = APP_ALIASES.get(clean_name, clean_name)
+    if aliased != clean_name:
+        proto = BUILTIN_PROTOCOLS.get(aliased)
+        if proto and _launch_target(proto):
+            return f"Opening {app_name}."
+        site = COMMON_WEBSITES.get(aliased)
+        if site and _launch_target(site):
+            return f"Opening {aliased.title()}."
+
+    # 5. Discovered Apps (Registry App Paths + Start Menu + Desktop + PATH)
+    discovered = _discover_installed_apps()
+    for candidate_key in (clean_name, aliased):
+        if candidate_key in discovered:
+            target = discovered[candidate_key]
+            if _launch_target(target):
+                return f"Opening {app_name}."
+
+    # 6. Curated APP_COMMANDS
+    cmd = APP_COMMANDS.get(clean_name) or APP_COMMANDS.get(aliased)
+    if cmd:
+        if cmd in BUILTIN_PROTOCOLS and _launch_target(BUILTIN_PROTOCOLS[cmd]):
+            return f"Opening {app_name}."
+        if _launch_target(cmd):
+            return f"Opening {app_name}."
+
+    # 7. Fuzzy matching against all candidate keys
+    all_candidates = list(discovered.keys()) + list(COMMON_WEBSITES.keys()) + list(BUILTIN_PROTOCOLS.keys()) + list(APP_ALIASES.keys())
+    if all_candidates:
+        match, score = process.extractOne(clean_name, all_candidates, scorer=fuzz.ratio)
+        if score >= 70:
+            if match in BUILTIN_PROTOCOLS and _launch_target(BUILTIN_PROTOCOLS[match]):
+                return f"Opening {match}."
+            if match in COMMON_WEBSITES and _launch_target(COMMON_WEBSITES[match]):
+                return f"Opening {match.title()}."
+            if match in discovered and _launch_target(discovered[match]):
+                return f"Opening {match}."
+            if match in APP_ALIASES:
+                sub = APP_ALIASES[match]
+                if sub in discovered and _launch_target(discovered[sub]):
+                    return f"Opening {match}."
+
+    # 8. Final PATH fallback
+    import shutil
+    single_word = clean_name.split()[0]
+    which = shutil.which(single_word) or shutil.which(f"{single_word}.exe")
+    if which and _launch_target(which):
+        return f"Opening {app_name}."
+
+    return None
+
+
+def _close_app(app_name: str) -> Optional[str]:
+    """
+    Close an application cleanly via taskkill.
+    """
+    clean_name = app_name.strip().lower().rstrip(".!?")
+    if not clean_name:
+        return None
+
+    if clean_name in PROTECTED_PROCESSES or f"{clean_name}.exe" in PROTECTED_PROCESSES:
+        return f"For system stability, closing {app_name} is restricted."
+
+    # Find candidates
+    candidates = PROCESS_ALIASES.get(clean_name, [])
+    if not candidates:
+        aliased = APP_ALIASES.get(clean_name)
+        if aliased and aliased in PROCESS_ALIASES:
+            candidates = PROCESS_ALIASES[aliased]
+        else:
+            discovered = _discover_installed_apps()
+            if clean_name in discovered:
+                target_path = discovered[clean_name]
+                candidates = [f"{Path(target_path).stem}.exe"]
+            elif clean_name in APP_COMMANDS:
+                cmd = APP_COMMANDS[clean_name]
+                candidates = [cmd if cmd.endswith(".exe") else f"{cmd}.exe"]
+            else:
+                return None
+
+    closed_any = False
+    for exe in candidates:
+        if exe.lower() in PROTECTED_PROCESSES:
+            continue
+        try:
+            proc = subprocess.run(
+                ["taskkill", "/IM", exe, "/F"],
+                shell=False,
+                capture_output=True,
+                text=True,
+            )
+            if proc.returncode == 0:
+                closed_any = True
+        except Exception:
+            pass
+
+    if closed_any:
+        return f"Closed {app_name}."
+
+    return f"{app_name} does not appear to be running."
+
+
 def try_local_command(text: str) -> Optional[str]:
     """
-    If `text` matches a system action or known local app, execute it
-    and return a confirmation string. Returns None if nothing matched.
+    If `text` matches a system action, app open/close command, or known app/website,
+    execute it immediately and return a confirmation string.
+    Returns None if nothing matched (falls through to AI/brain).
     """
     lowered = text.strip().lower()
 
-    # Check system commands FIRST (higher priority than generic app names)
+    # 1. System command patterns first (volume, screenshot, lock, sleep, etc.)
     for pattern, handler in SYSTEM_PATTERNS:
         m = re.search(pattern, lowered)
         if m:
@@ -269,155 +631,24 @@ def try_local_command(text: str) -> Optional[str]:
             except Exception as e:
                 return f"Couldn't do that: {e}"
 
-    # Then check app open/close triggers
-    for trigger in OPEN_TRIGGERS:
-        if lowered.startswith(trigger):
-            app_name = lowered[len(trigger):].strip()
-            return _launch_app(app_name)
+    # 2. Extract app launch or close intent
+    action_info = _extract_app_action(lowered)
+    if action_info:
+        action, target = action_info
+        if action == "open":
+            return _launch_app(target)
+        elif action == "close":
+            return _close_app(target)
 
-    for trigger in CLOSE_TRIGGERS:
-        if lowered.startswith(trigger):
-            app_name = lowered[len(trigger):].strip()
-            return _close_app(app_name)
-
-    return None
-
-
-def _discover_installed_apps() -> dict[str, str]:
-    """
-    Scan Windows Start Menu directories for .lnk shortcuts.
-    Returns mapping of lowercase app name -> path to .lnk file.
-    Cached after first run.
-    """
-    global _discovered_apps
-    if _discovered_apps is not None:
-        return _discovered_apps
-
-    apps: dict[str, str] = {}
-    search_dirs = [
-        Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData")) / "Microsoft" / "Windows" / "Start Menu" / "Programs",
-        Path(os.environ.get("APPDATA", "")) / "Microsoft" / "Windows" / "Start Menu" / "Programs" if os.environ.get("APPDATA") else None,
-    ]
-
-    for s_dir in search_dirs:
-        if s_dir and s_dir.exists():
-            try:
-                for lnk in s_dir.rglob("*.lnk"):
-                    stem_name = lnk.stem.lower().strip()
-                    if "uninstall" in stem_name or "remove" in stem_name:
-                        continue
-                    apps[stem_name] = str(lnk.resolve())
-            except Exception:
-                pass
-
-    _discovered_apps = apps
-    return _discovered_apps
-
-
-PROTECTED_PROCESSES = {
-    "explorer.exe", "svchost.exe", "csrss.exe", "lsass.exe",
-    "smss.exe", "winlogon.exe", "services.exe", "system.exe", "idle.exe"
-}
-
-
-def _launch_app(app_name: str) -> Optional[str]:
-    # 1. Curated APP_COMMANDS first
-    command = APP_COMMANDS.get(app_name)
-    if command:
-        try:
-            if command.startswith("ms-settings:"):
-                os.startfile(command)
-            else:
-                subprocess.Popen(command, shell=True)
-            return f"Opening {app_name}."
-        except Exception as e:
-            return f"Couldn't open {app_name}: {e}"
-
-    # 2. Dynamic discovered apps (exact match)
-    discovered = _discover_installed_apps()
-    if app_name in discovered:
-        target = discovered[app_name]
-        try:
-            os.startfile(target)
-            return f"Opening {app_name}."
-        except Exception as e:
-            return f"Couldn't open {app_name}: {e}"
-
-    # 3. Fuzzy matching across discovered apps + curated commands
-    all_candidates = list(APP_COMMANDS.keys()) + list(discovered.keys())
-    if all_candidates:
-        match, score = process.extractOne(app_name, all_candidates, scorer=fuzz.ratio)
-        if score >= 75:
-            if match in APP_COMMANDS:
-                cmd = APP_COMMANDS[match]
-                try:
-                    if cmd.startswith("ms-settings:"):
-                        os.startfile(cmd)
-                    else:
-                        subprocess.Popen(cmd, shell=True)
-                    return f"Opening {match}."
-                except Exception as e:
-                    return f"Couldn't open {match}: {e}"
-            elif match in discovered:
-                target = discovered[match]
-                try:
-                    os.startfile(target)
-                    return f"Opening {match}."
-                except Exception as e:
-                    return f"Couldn't open {match}: {e}"
-
-    # 4. PATH and Windows command fallback (e.g. mspaint, notepad, cmd, calc)
-    import shutil
-    clean_target = app_name.split()[0] if app_name else ""
-    exe_path = shutil.which(clean_target) or shutil.which(f"{clean_target}.exe")
-    if exe_path:
-        try:
-            os.startfile(exe_path)
-            return f"Opening {app_name}."
-        except Exception as e:
-            return f"Couldn't open {app_name}: {e}"
+    # 3. Direct app name or website trigger (e.g. user just says "calculator" or "notepad")
+    clean_single = lowered.rstrip(".!?").strip()
+    quick_names = {
+        "calculator", "calc", "notepad", "chrome", "google chrome",
+        "brave", "vscode", "vs code", "visual studio code", "terminal",
+        "wt", "cmd", "explorer", "paint", "spotify", "discord",
+        "youtube", "google", "github", "chatgpt", "settings"
+    }
+    if clean_single in quick_names:
+        return _launch_app(clean_single)
 
     return None
-
-
-def _close_app(app_name: str) -> Optional[str]:
-    command = APP_COMMANDS.get(app_name)
-    exe_guess = None
-    if command:
-        exe_guess = command if command.endswith(".exe") else f"{command}.exe"
-    else:
-        # Check discovered apps
-        discovered = _discover_installed_apps()
-        if app_name in discovered:
-            exe_guess = f"{Path(discovered[app_name]).stem}.exe"
-        else:
-            all_candidates = list(APP_COMMANDS.keys()) + list(discovered.keys())
-            if all_candidates:
-                match, score = process.extractOne(app_name, all_candidates, scorer=fuzz.ratio)
-                if score >= 75:
-                    if match in APP_COMMANDS:
-                        c = APP_COMMANDS[match]
-                        exe_guess = c if c.endswith(".exe") else f"{c}.exe"
-                    elif match in discovered:
-                        exe_guess = f"{Path(discovered[match]).stem}.exe"
-
-    if not exe_guess:
-        return None
-
-    if exe_guess.lower() in PROTECTED_PROCESSES:
-        return f"For system stability, closing {app_name} is restricted."
-
-    try:
-        proc = subprocess.run(
-            ["taskkill", "/IM", exe_guess, "/F"],
-            shell=False,
-            capture_output=True,
-            text=True,
-        )
-        if proc.returncode == 0:
-            return f"Closed {app_name}."
-        elif "not found" in proc.stderr.lower():
-            return f"{app_name} doesn't appear to be running."
-        return f"Closed {app_name}."
-    except OSError as e:
-        return f"Couldn't close {app_name}: {e}"

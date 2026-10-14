@@ -175,7 +175,7 @@ def _clean_tts_text(text: str) -> str:
     t = re.sub(r"^[-*•]\s+", "", t, flags=re.MULTILINE)
     t = re.sub(r"─{3,}", "", t)
     # Remove common emojis and decorative symbols
-    t = re.sub(r"[✨🔴🎙️🗣️🕒🔋💾📋📸⏰ℹ️➤🗖🗗●•]", "", t)
+    t = re.sub(r"[✨🔴🎙️🗣️🕒🔋💾📋📸⏰ℹ️➤🗖🗗●•🔔⏳]", "", t)
     return " ".join(t.split())
 
 

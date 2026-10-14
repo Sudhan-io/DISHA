@@ -87,7 +87,7 @@ def acquire_single_instance_lock(on_activate: Optional[Callable] = None) -> bool
 # Exit Triggers ("go", "bye", "exit", "close", etc.)
 # ---------------------------------------------------------------------------
 EXIT_WORDS = {
-    "go", "go away", "bye", "goodbye", "exit", "close", "dismiss",
+    "go", "go away", "bye", "goodbye", "exit", "close", "close window", "close disha", "dismiss",
     "hide", "stop", "shut up", "bye bye", "see ya", "later", "quit", "minimize"
 }
 

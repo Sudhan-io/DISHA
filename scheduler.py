@@ -240,7 +240,7 @@ def try_schedule_command(text: str) -> Optional[str]:
                 time_str = dt.strftime("%I:%M %p")
             except Exception:
                 time_str = r.get("due", "")[11:16]
-            tag = "⏰" if r.get("type") == "alarm" else ("⏳" if r.get("type") == "timer" else "🔔")
+            tag = "[Alarm]" if r.get("type") == "alarm" else ("[Timer]" if r.get("type") == "timer" else "[Reminder]")
             lines.append(f"{tag} {r['message']} (due at {time_str})")
         return "Your active schedule:\n" + "\n".join(lines)
 

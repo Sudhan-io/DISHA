@@ -56,7 +56,7 @@ def _ans_gpu(m, text: str) -> str:
     global _last_gpu_check, _cached_gpu_str
     import time
     now = time.monotonic()
-    if _cached_gpu_str and (now - _last_gpu_check) < 5.0:
+    if _cached_gpu_str and (now - _last_gpu_check) < 10.0:
         return _cached_gpu_str
 
     try:
@@ -93,7 +93,9 @@ def _ans_gpu(m, text: str) -> str:
     except Exception:
         pass
 
-    return "GPU metrics could not be retrieved from hardware sensors."
+    _cached_gpu_str = "GPU metrics could not be retrieved from hardware sensors."
+    _last_gpu_check = now
+    return _cached_gpu_str
 
 
 def _ans_disk(m, text: str) -> str:
@@ -115,7 +117,7 @@ def _ans_wifi(m, text: str) -> str:
     global _last_wifi_check, _cached_wifi_str
     import time
     now = time.monotonic()
-    if _cached_wifi_str and (now - _last_wifi_check) < 5.0:
+    if _cached_wifi_str and (now - _last_wifi_check) < 10.0:
         return _cached_wifi_str
 
     try:
@@ -268,8 +270,8 @@ def _ans_get_name(m, text: str) -> str:
 _PATTERNS: list[tuple[str, Callable]] = [
     (r"(?:my name is|call me|you can call me|i am called)\s+([A-Za-z]+(?:\s+[A-Za-z]+)?)", _ans_set_name),
     (r"\b(?:what is|what's|do you know)\s+(?:my|my own)\s+name\b|\bwho am i\b", _ans_get_name),
-    (r"\b(?:what time is it|what(?:'s| is) (?:the )?time|tell me the time|current time)\b|^\s*time\s*$", _ans_time),
-    (r"\b(?:what(?:'s| is) (?:the )?date|what is today(?:'s)? date|what day is (?:it|today))\b|^\s*(?:date|today)\s*$", _ans_date),
+    (r"\b(?:what time is it(?: right now)?|what(?:'s| is) (?:the )?(?:current )?time(?: right now)?|tell me the time|current time|time right now)\b|^\s*time\s*$", _ans_time),
+    (r"\b(?:what(?:'s| is) (?:the |today(?:'s)? )?date|what(?:'s| is) today(?:'s)?(?: date)?|what day is (?:it|today)|today(?:'s)? date|tell me the date|current date)\b|^\s*(?:date|today)\s*$", _ans_date),
     (r"\bbattery\b|\bcharge\b", _ans_battery),
     (r"\bcpu\b|\bprocessor\b", _ans_cpu),
     (r"\bgpu\b|\bgraphics\b|\bvram\b|\bnvidia\b|\brtx\b", _ans_gpu),

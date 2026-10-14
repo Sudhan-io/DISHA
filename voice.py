@@ -34,8 +34,8 @@ vosk.SetLogLevel(-1)  # quiet Vosk's default console spam
 # ---------------------------------------------------------------------------
 # Tunables (optional: define any of these in config.py to override)
 # ---------------------------------------------------------------------------
-MIN_RMS = getattr(_cfg, "VOICE_MIN_RMS", 80.0)                # absolute loudness floor (sensitive to soft casual speech)
-NOISE_MARGIN = getattr(_cfg, "VOICE_NOISE_MARGIN", 1.4)        # speech must be this x louder than room noise
+MIN_RMS = getattr(_cfg, "VOICE_MIN_RMS", 15.0)                # absolute loudness floor (calibrated for real laptop & headset mics)
+NOISE_MARGIN = getattr(_cfg, "VOICE_NOISE_MARGIN", 1.25)       # speech must be this x louder than room noise
 MIN_SPEECH_SECONDS = getattr(_cfg, "VOICE_MIN_SPEECH_SECONDS", 0.2)
 NO_SPEECH_TIMEOUT = getattr(_cfg, "VOICE_NO_SPEECH_TIMEOUT", 5.0)   # give up if you never speak
 MAX_LISTEN_SECONDS = getattr(_cfg, "VOICE_MAX_SECONDS", 20.0)
@@ -63,7 +63,7 @@ _tts_thread = None
 
 _listen_lock = threading.Lock()
 _interrupt_event = threading.Event()
-_noise_floor = 150.0  # adaptive; persists between listening sessions
+_noise_floor = 5.0   # calibrated for clean room background noise (real measured ~0.5-2.0)
 _root_ref = None
 
 
@@ -378,18 +378,26 @@ def _get_whisper_model():
         try:
             from faster_whisper import WhisperModel
             import ctranslate2
-            model_size = getattr(_cfg, "WHISPER_MODEL_SIZE", "small.en")
-            # Auto-detect CUDA for fast GPU inference (~0.1s on RTX GPU), graceful CPU fallback
+            model_size = getattr(_cfg, "WHISPER_MODEL_SIZE", "base.en")
+            # Auto-detect CUDA only if CUDA runtime libraries (cublas64_12.dll) are verified working
             has_cuda = ctranslate2.get_cuda_device_count() > 0
-            device = "cuda" if has_cuda else "cpu"
-            compute_type = "float16" if device == "cuda" else "int8"
-            _dbg(f"Loading faster-whisper model '{model_size}' on {device} ({compute_type})...")
-            try:
-                _whisper_model = WhisperModel(model_size, device=device, compute_type=compute_type)
-            except Exception as e_dev:
-                _dbg(f"{device} init failed ({e_dev}), falling back to CPU int8...")
+            loaded = False
+            if has_cuda:
+                try:
+                    test_m = WhisperModel(model_size, device="cuda", compute_type="float16")
+                    # Real inference probe to confirm cuBLAS runtime is functional
+                    dummy = np.zeros(16000, dtype=np.float32)
+                    list(test_m.transcribe(dummy, language="en")[0])
+                    _whisper_model = test_m
+                    loaded = True
+                    _dbg(f"faster-whisper '{model_size}' loaded and verified on CUDA float16!")
+                except Exception as e_cuda:
+                    _dbg(f"CUDA inference verification failed ({e_cuda}); falling back to CPU int8.")
+            
+            if not loaded:
+                _dbg(f"Loading faster-whisper model '{model_size}' on CPU (int8, 6 threads)...")
                 _whisper_model = WhisperModel(model_size, device="cpu", compute_type="int8", cpu_threads=6)
-            _dbg("faster-whisper model loaded successfully!")
+                _dbg("faster-whisper CPU model loaded successfully!")
         except Exception as e:
             _dbg(f"Failed to load faster-whisper: {e}")
             _whisper_model = False
@@ -427,7 +435,7 @@ def listen(sample_rate: int = 16000, max_seconds: float = None, on_partial=None)
             audio_queue.put(bytes(indata))
 
         import collections
-        pre_roll = collections.deque(maxlen=12)  # 1200ms pre-roll buffer so initial casual words are never clipped
+        pre_roll = collections.deque(maxlen=15)  # 1500ms pre-roll buffer so initial casual words are never clipped
         parts = []
         recorded_blocks = []
         speech_blocks = 0
@@ -512,6 +520,12 @@ def listen(sample_rate: int = 16000, max_seconds: float = None, on_partial=None)
                         on_partial("Transcribing...")
                     raw_audio = b"".join(recorded_blocks)
                     audio_np = np.frombuffer(raw_audio, dtype=np.int16).astype(np.float32) / 32768.0
+
+                    # Automatic gain control / peak normalization so Whisper receives clear, crisp input
+                    max_amp = float(np.max(np.abs(audio_np)))
+                    if max_amp > 1e-4:
+                        audio_np = audio_np * (0.85 / max_amp)
+
                     segments, _ = w_model.transcribe(
                         audio_np,
                         language="en",
@@ -526,8 +540,12 @@ def listen(sample_rate: int = 16000, max_seconds: float = None, on_partial=None)
                     if whisper_text:
                         _dbg(f"faster-whisper result: '{whisper_text}'")
                         return whisper_text
+                    _dbg("faster-whisper detected silence / no speech")
+                    return ""
                 except Exception as e:
-                    _dbg(f"faster-whisper error: {e}. Falling back to Vosk.")
+                    _dbg(f"faster-whisper error: {e}")
+                    if not use_whisper:
+                        pass
 
         # Fallback to Vosk result
         final = _clean_result(json.loads(recognizer.FinalResult()))

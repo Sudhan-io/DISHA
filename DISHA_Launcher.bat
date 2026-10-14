@@ -1,40 +1,42 @@
 @echo off
 REM ====================================================================
-REM DISHA Portable Launcher
-REM Auto-detects its drive letter and launches DISHA in USB Mode.
+REM DISHA Launcher
+REM Auto-detects drive letter, checks running status, and launches cleanly.
 REM ====================================================================
-
-set CURRENT_DIR=%~dp0
+title DISHA AI Assistant Launcher
+cd /d "%~dp0"
+set SCRIPT_DIR=%~dp0
 set DRIVE=%~d0
 
-if exist "%CURRENT_DIR%venv\Scripts\pythonw.exe" (
-    set DISHA_DIR=%CURRENT_DIR:~0,-1%
-) else if exist "%DRIVE%\DISHA\venv\Scripts\pythonw.exe" (
-    set DISHA_DIR=%DRIVE%\DISHA
-) else (
-    set DISHA_DIR=%CURRENT_DIR:~0,-1%
-)
-
-set PYTHONW=%DISHA_DIR%\venv\Scripts\pythonw.exe
-set MAIN=%DISHA_DIR%\main.py
+set PYTHONW=%SCRIPT_DIR%venv\Scripts\pythonw.exe
+set PYTHON=%SCRIPT_DIR%venv\Scripts\python.exe
+set MAIN=%SCRIPT_DIR%main.py
 
 if not exist "%PYTHONW%" (
-    if exist "%DISHA_DIR%\venv\Scripts\python.exe" (
-        set PYTHONW=%DISHA_DIR%\venv\Scripts\python.exe
+    if exist "%PYTHON%" (
+        set PYTHONW=%PYTHON%
     ) else (
         echo [ERROR] DISHA virtual environment not found!
         echo Looked at: "%PYTHONW%"
-        echo Please ensure the venv folder is installed in the DISHA folder.
+        echo Please ensure the venv folder is installed in the DISHA directory.
         pause
         exit /b 1
     )
 )
-
-cd /d "%DISHA_DIR%"
 
 REM If running from an external portable drive (not C: or D:), enforce USB portable security
 if /i not "%DRIVE%"=="C:" if /i not "%DRIVE%"=="D:" (
     set DISHA_USB_MODE=true
 )
 
-start "" "%PYTHONW%" "%MAIN%"
+REM Check if DISHA is already running
+netstat -ano | findstr 54321 | findstr LISTENING >nul 2>&1
+if %errorlevel% equ 0 (
+    echo [INFO] DISHA is already active!
+    echo Bringing window to front...
+    "%PYTHON%" -c "import socket; s=socket.socket(); s.connect(('127.0.0.1', 54321)); s.sendall(b'ACTIVATE\n'); s.close()" >nul 2>&1
+    exit /b 0
+)
+
+echo Starting DISHA AI Assistant...
+start "" /d "%SCRIPT_DIR%" "%PYTHONW%" "%MAIN%"

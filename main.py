@@ -688,7 +688,9 @@ class DishaAssistantWindow:
 
     def focus_text_input(self):
         self.win.deiconify()
+        self.win.lift()
         self.win.attributes("-topmost", True)
+        self.win.focus_force()
         self.entry.focus_set()
         if self.entry.get() == self.placeholder_text:
             self.entry.delete(0, tk.END)
@@ -990,7 +992,9 @@ def open_or_focus_assistant(root, mode: str = "voice"):
         _assistant_window = DishaAssistantWindow(root)
     else:
         _assistant_window.win.deiconify()
+        _assistant_window.win.lift()
         _assistant_window.win.attributes("-topmost", True)
+        _assistant_window.win.focus_force()
 
     if mode == "voice":
         _assistant_window.start_listening()

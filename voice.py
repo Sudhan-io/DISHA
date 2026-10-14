@@ -16,6 +16,7 @@ import ctypes
 import json
 import os
 import queue
+import socket
 import threading
 import time
 from typing import Callable, Optional
@@ -472,9 +473,37 @@ def _add_cuda_dll_dirs() -> None:
                 os.environ["PATH"] = bin_dir + os.pathsep + os.environ.get("PATH", "")
 
 
+def _transcribe_google(raw_audio: bytes, sample_rate: int = 16000) -> Optional[str]:
+    """
+    Transcribe raw PCM audio bytes using Google Web Speech API (Google Voice backend).
+    Provides Google Assistant-grade cloud transcription for accents and conversational speech.
+    Returns transcribed string, or None if failed or silent.
+    """
+    try:
+        import speech_recognition as sr
+        audio = sr.AudioData(raw_audio, sample_rate, 2)
+        rec = sr.Recognizer()
+        lang = getattr(_cfg, "GOOGLE_STT_LANG", "en-US")
+        text = rec.recognize_google(audio, language=lang).strip()
+        if text:
+            _dbg(f"Google Voice recognition success ({lang}): '{text}'")
+            return text
+    except Exception as e:
+        _dbg(f"Google Voice transcription note: {e}")
+    return None
+
+
 def stt_status() -> str:
-    """Human-readable description of which speech model/device is active."""
-    return f"{_whisper_name or 'not loaded'} on {_whisper_device}"
+    """Human-readable description of active speech models."""
+    mode = getattr(_cfg, "STT_ENGINE", "auto").lower()
+    whisper_info = f"{_whisper_name or getattr(_cfg, 'WHISPER_MODEL_SIZE', 'small.en')} on {_whisper_device}"
+    if mode == "auto":
+        return f"Hybrid (Online: Google Voice + Offline: OpenAI Whisper {whisper_info})"
+    elif mode in ("google", "online"):
+        return f"Google Voice Cloud (Fallback: {whisper_info})"
+    elif mode == "whisper":
+        return f"OpenAI Whisper ({whisper_info})"
+    return "Vosk Offline (Kaldi)"
 
 
 def _get_whisper_model():
@@ -627,7 +656,7 @@ def listen(sample_rate: int = 16000, max_seconds: float = None, on_partial=None)
         _interrupt_event.clear()
         _wait_for_tts()
 
-        use_whisper = getattr(_cfg, "STT_ENGINE", "whisper") == "whisper"
+        stt_mode = getattr(_cfg, "STT_ENGINE", "auto").lower()
         model = _get_stt_model()
         recognizer = vosk.KaldiRecognizer(model, sample_rate)
         recognizer.SetWords(True)
@@ -720,14 +749,43 @@ def listen(sample_rate: int = 16000, max_seconds: float = None, on_partial=None)
             _dbg("no real speech detected")
             return ""
 
-        # Neural transcription with faster-whisper
-        if use_whisper:
+        raw_audio = b"".join(recorded_blocks)
+
+        # Tier 1: Online Google Cloud Speech Recognition (Google Voice accuracy)
+        if stt_mode in ("auto", "google", "online"):
+            is_online = False
+            try:
+                import gemini_client
+                is_online = gemini_client.is_online()
+            except Exception:
+                try:
+                    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    s.connect(("8.8.8.8", 80))
+                    s.close()
+                    is_online = True
+                except Exception:
+                    is_online = False
+
+            if is_online:
+                try:
+                    if on_partial:
+                        on_partial("Transcribing (Google Cloud)...")
+                    t0 = time.monotonic()
+                    google_text = _transcribe_google(raw_audio, sample_rate)
+                    if google_text:
+                        _dbg(f"Google Voice ({time.monotonic() - t0:.2f}s): '{google_text}'")
+                        return google_text
+                    _dbg("Google Voice detected no speech or silent; trying Whisper fallback")
+                except Exception as e_g:
+                    _dbg(f"Google Voice error: {e_g}")
+
+        # Tier 2: Neural Local Whisper Recognition (ChatGPT Voice accuracy on GPU or CPU)
+        if stt_mode in ("auto", "whisper", "google", "online"):
             w_model = _get_whisper_model()
             if w_model:
                 try:
                     if on_partial:
-                        on_partial("Transcribing...")
-                    raw_audio = b"".join(recorded_blocks)
+                        on_partial("Transcribing (Whisper Neural)...")
                     audio_np = np.frombuffer(raw_audio, dtype=np.int16).astype(np.float32) / 32768.0
 
                     # Automatic gain control / peak normalization with safe ceiling
@@ -744,8 +802,6 @@ def listen(sample_rate: int = 16000, max_seconds: float = None, on_partial=None)
                     return ""
                 except Exception as e:
                     _dbg(f"faster-whisper error: {e}")
-                    if not use_whisper:
-                        pass
 
         # Fallback to Vosk result
         final = _clean_result(json.loads(recognizer.FinalResult()))

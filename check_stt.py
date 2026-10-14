@@ -47,6 +47,16 @@ def check_audio_devices():
 
 def check_models():
     print_banner("2. SPEECH-TO-TEXT ENGINE STATUS")
+    print(f"Configured STT Mode: {voice._cfg.STT_ENGINE}")
+    
+    # Check Google Voice (Online)
+    try:
+        import speech_recognition as sr
+        print("Google Speech Recognition (Online): Available (Google Web Speech API)")
+    except ImportError:
+        print("Google Speech Recognition: SpeechRecognition not installed")
+
+    # Check Whisper (Local Neural)
     print("Initializing faster-whisper engine...")
     t0 = time.monotonic()
     w_model = _get_whisper_model()

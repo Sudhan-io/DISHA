@@ -563,9 +563,10 @@ def _build_prompt() -> str:
                 words.append(n)
     except Exception:
         pass
-    prompt = (f"{name.title()}. Open, close, launch, remind me, volume, screenshot. "
-              + ", ".join(words[:25]) + ".")
-    _prompt_cache = prompt[:600]
+    # Natural sentence prompt avoids comma splices in Whisper transcription
+    prompt = (f"{name.title()}. Open Chrome. Launch VS Code. Open Calculator. Close Spotify. "
+              f"Set volume to 50. Open Notepad. " + ". ".join(words[:15]) + ".")
+    _prompt_cache = prompt[:500]
     return _prompt_cache
 
 
@@ -604,8 +605,8 @@ def _transcribe(w_model, audio_np):
     if low in PHANTOM_PHRASES:
         _dbg(f"dropped phantom phrase: '{result}'")
         return ""
-    # the model sometimes just echoes the vocabulary hint when it hears nothing
-    if prompt and len(low.split()) >= 3 and low in prompt.lower():
+    # Only drop if it echoes 5+ consecutive words from the vocabulary prompt
+    if prompt and len(low.split()) >= 5 and low in prompt.lower():
         _dbg(f"dropped echo of vocabulary prompt: '{result}'")
         return ""
     return result

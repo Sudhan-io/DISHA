@@ -493,17 +493,27 @@ def _launch_target(target: str) -> bool:
     return False
 
 
+def _clean_input(text: str) -> str:
+    """Normalize speech-to-text artifacts: strip commas, quotes, hyphens, colons, and wake words."""
+    cleaned = re.sub(r"[,;:\-\"'`~]", " ", text).strip().lower()
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(".!? ")
+    # Strip leading assistant names / wake words
+    cleaned = re.sub(r"^(?:hey\s+disha|disha|ok\s+disha|okay\s+disha)\s*", "", cleaned).strip()
+    return cleaned
+
+
 def _extract_app_action(text: str) -> Optional[tuple[str, str]]:
     """
     Extract action ('open' or 'close') and target app from natural phrasing.
-    Supports prefixes like 'can you open', 'please open', 'open up', 'fire up', etc.
+    Resilient to Whisper commas, punctuation, and speech artifacts.
+    Supports prefixes like 'can you open', 'please open', 'go to', 'open up', 'fire up', etc.
     """
-    cleaned = text.strip().lower().rstrip(".!?")
+    cleaned = _clean_input(text)
 
     # 1. Open action pattern
     open_regex = re.compile(
-        r"^(?:please\s+|can\s+you\s+|could\s+you\s+|would\s+you\s+|hey\s+disha\s+|disha\s+)?"
-        r"(?:open|launch|start|run|bring\s+up|fire\s+up)"
+        r"^(?:please\s+|can\s+you\s+|could\s+you\s+|would\s+you\s+)?"
+        r"(?:open|launch|start|run|bring\s+up|fire\s+up|go\s+to|goto|go)"
         r"(?:\s+up|\s+the|\s+my|\s+app|\s+application)*\s+"
         r"(.+?)"
         r"(?:\s+please|\s+for\s+me|\s+now|\s+app|\s+application)*$",
@@ -513,12 +523,13 @@ def _extract_app_action(text: str) -> Optional[tuple[str, str]]:
     if m_open:
         target = m_open.group(1).strip()
         target = re.sub(r"^(?:the|my|up|app)\s+", "", target).strip()
+        target = re.sub(r"[,;:\-\"'`~.!?]", "", target).strip()
         if target:
             return ("open", target)
 
     # 2. Close action pattern
     close_regex = re.compile(
-        r"^(?:please\s+|can\s+you\s+|could\s+you\s+|would\s+you\s+|hey\s+disha\s+|disha\s+)?"
+        r"^(?:please\s+|can\s+you\s+|could\s+you\s+|would\s+you\s+)?"
         r"(?:close|quit|kill|exit|terminate|shut\s+down)"
         r"(?:\s+the|\s+my|\s+app|\s+application)*\s+"
         r"(.+?)"
@@ -529,6 +540,7 @@ def _extract_app_action(text: str) -> Optional[tuple[str, str]]:
     if m_close:
         target = m_close.group(1).strip()
         target = re.sub(r"^(?:the|my|app)\s+", "", target).strip()
+        target = re.sub(r"[,;:\-\"'`~.!?]", "", target).strip()
         if target:
             return ("close", target)
 
@@ -679,11 +691,13 @@ def try_local_command(text: str) -> Optional[str]:
     execute it immediately and return a confirmation string.
     Returns None if nothing matched (falls through to AI/brain).
     """
-    lowered = text.strip().lower()
+    cleaned = _clean_input(text)
+    if not cleaned:
+        return None
 
     # 1. System command patterns first (volume, screenshot, lock, sleep, etc.)
     for pattern, handler in SYSTEM_PATTERNS:
-        m = re.search(pattern, lowered)
+        m = re.search(pattern, cleaned)
         if m:
             try:
                 return handler(m)
@@ -691,7 +705,7 @@ def try_local_command(text: str) -> Optional[str]:
                 return f"Couldn't do that: {e}"
 
     # 2. Extract app launch or close intent
-    action_info = _extract_app_action(lowered)
+    action_info = _extract_app_action(text)
     if action_info:
         action, target = action_info
         if action == "open":
@@ -699,15 +713,20 @@ def try_local_command(text: str) -> Optional[str]:
         elif action == "close":
             return _close_app(target)
 
-    # 3. Direct app name or website trigger (e.g. user just says "calculator" or "notepad")
-    clean_single = lowered.rstrip(".!?").strip()
-    quick_names = {
-        "calculator", "calc", "notepad", "chrome", "google chrome",
-        "brave", "vscode", "vs code", "visual studio code", "terminal",
-        "wt", "cmd", "explorer", "paint", "spotify", "discord",
-        "youtube", "google", "github", "chatgpt", "settings"
-    }
-    if clean_single in quick_names:
-        return _launch_app(clean_single)
+    # 3. Direct app name or website trigger (e.g. user just says "calculator", "chrome", "vscode")
+    clean_single = re.sub(r"^(?:open|launch|start|run|goto|go\s+to|the|my|app)\s+", "", cleaned).strip()
+    if clean_single:
+        # Check against quick names, protocols, common websites, aliases, and discovered apps
+        all_candidates = (
+            set(BUILTIN_PROTOCOLS.keys()) |
+            set(COMMON_WEBSITES.keys()) |
+            set(APP_ALIASES.keys()) |
+            set(APP_COMMANDS.keys()) |
+            set(_discover_installed_apps().keys())
+        )
+        if clean_single in all_candidates:
+            res = _launch_app(clean_single)
+            if res:
+                return res
 
     return None

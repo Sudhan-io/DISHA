@@ -130,6 +130,7 @@ NOISE_WORDS = {
 _stt_model = None
 _tts_queue = queue.Queue()
 _tts_thread = None
+_tts_interrupted = False
 
 _listen_lock = threading.Lock()
 _interrupt_event = threading.Event()
@@ -146,8 +147,7 @@ def set_root(root) -> None:
     """Store Tk root reference for thread-safe callbacks."""
     global _root_ref
     _root_ref = root
-    if getattr(_cfg, "STT_ENGINE", "whisper") == "whisper":
-        preload_stt()
+    preload_stt()
 
 
 def _dbg(msg: str) -> None:
@@ -246,7 +246,11 @@ def _tts_speak_neural(text: str) -> bool:
         frames = [f.to_ndarray() for f in container.decode(audio=0)]
         if not frames:
             return False
+        if _tts_interrupted:
+            return True
         audio_np = np.concatenate(frames, axis=1).T
+        if _tts_interrupted:
+            return True
         sd.play(audio_np, samplerate=sr)
         sd.wait()
         return True
@@ -266,6 +270,11 @@ def _tts_worker():
             _tts_queue.task_done()
             break
         text, done_event = item
+        if _tts_interrupted:
+            if done_event:
+                done_event.set()
+            _tts_queue.task_done()
+            continue
         if TTS_ENABLED and text:
             tts_engine = getattr(_cfg, "TTS_ENGINE", "neural").lower()
             success = False
@@ -353,16 +362,40 @@ def speak(text: str, wait: bool = False) -> None:
     Speak text aloud, fully offline. No-op if TTS is disabled in config.
     If wait is True, blocks the calling thread until speaking is complete.
     """
+    global _tts_interrupted
     if not TTS_ENABLED or not text:
         return
     cleaned = _clean_tts_text(text)
     if not cleaned:
         return
+    _tts_interrupted = False
     _ensure_tts_thread()
     done_event = threading.Event() if wait else None
     _tts_queue.put((cleaned, done_event))
     if wait and done_event:
         done_event.wait()
+
+
+def stop_speaking() -> None:
+    """Immediately stop audio playback and clear pending speech queue."""
+    global _tts_interrupted
+    _tts_interrupted = True
+    try:
+        sd.stop()
+    except Exception:
+        pass
+    while True:
+        try:
+            item = _tts_queue.get_nowait()
+            if item is not None:
+                _, done_event = item
+                if done_event:
+                    done_event.set()
+            _tts_queue.task_done()
+        except queue.Empty:
+            break
+        except Exception:
+            break
 
 
 def _wait_for_tts(timeout: float = 30.0) -> None:
@@ -751,36 +784,94 @@ def listen(sample_rate: int = 16000, max_seconds: float = None, on_partial=None)
 
         raw_audio = b"".join(recorded_blocks)
 
-        # Tier 1: Online Google Cloud Speech Recognition (Google Voice accuracy)
-        if stt_mode in ("auto", "google", "online"):
-            is_online = False
+        has_cuda_gpu = ("GPU" in _whisper_device or "CUDA" in _whisper_device)
+        if not has_cuda_gpu:
             try:
-                import gemini_client
-                is_online = gemini_client.is_online()
+                import ctranslate2
+                has_cuda_gpu = ctranslate2.get_cuda_device_count() > 0
             except Exception:
-                try:
-                    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                    s.connect(("8.8.8.8", 80))
-                    s.close()
-                    is_online = True
-                except Exception:
-                    is_online = False
+                has_cuda_gpu = False
 
-            if is_online:
+        run_whisper_first = (stt_mode == "whisper") or (stt_mode == "auto" and has_cuda_gpu)
+
+        if run_whisper_first:
+            w_model = _get_whisper_model()
+            if w_model:
                 try:
                     if on_partial:
-                        on_partial("Transcribing (Google Cloud)...")
-                    t0 = time.monotonic()
-                    google_text = _transcribe_google(raw_audio, sample_rate)
-                    if google_text:
-                        _dbg(f"Google Voice ({time.monotonic() - t0:.2f}s): '{google_text}'")
-                        return google_text
-                    _dbg("Google Voice detected no speech or silent; trying Whisper fallback")
-                except Exception as e_g:
-                    _dbg(f"Google Voice error: {e_g}")
+                        on_partial("Transcribing (Whisper GPU)..." if has_cuda_gpu else "Transcribing (Whisper Neural)...")
+                    audio_np = np.frombuffer(raw_audio, dtype=np.int16).astype(np.float32) / 32768.0
 
-        # Tier 2: Neural Local Whisper Recognition (ChatGPT Voice accuracy on GPU or CPU)
-        if stt_mode in ("auto", "whisper", "google", "online"):
+                    # Automatic gain control / peak normalization with safe ceiling
+                    max_amp = float(np.max(np.abs(audio_np)))
+                    if max_amp > 1e-4:
+                        audio_np = audio_np * min(0.85 / max_amp, 30.0)
+
+                    t0 = time.monotonic()
+                    whisper_text = _transcribe(w_model, audio_np)
+                    _dbg(f"faster-whisper ({stt_status()}) {time.monotonic() - t0:.2f}s: '{whisper_text}'")
+                    if whisper_text:
+                        return whisper_text
+                    _dbg("faster-whisper detected silence / no speech; trying fallback")
+                except Exception as e:
+                    _dbg(f"faster-whisper error: {e}")
+
+            # Fallback to Google Cloud if online
+            if stt_mode in ("auto", "google", "online"):
+                is_online = False
+                try:
+                    import gemini_client
+                    is_online = gemini_client.is_online()
+                except Exception:
+                    try:
+                        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                        s.connect(("8.8.8.8", 80))
+                        s.close()
+                        is_online = True
+                    except Exception:
+                        is_online = False
+
+                if is_online:
+                    try:
+                        if on_partial:
+                            on_partial("Transcribing (Google Cloud)...")
+                        t0 = time.monotonic()
+                        google_text = _transcribe_google(raw_audio, sample_rate)
+                        if google_text:
+                            _dbg(f"Google Voice fallback ({time.monotonic() - t0:.2f}s): '{google_text}'")
+                            return google_text
+                    except Exception as e_g:
+                        _dbg(f"Google Voice fallback error: {e_g}")
+        else:
+            # Cloud-first path for CPU-only systems or explicit 'google' mode
+            if stt_mode in ("auto", "google", "online"):
+                is_online = False
+                try:
+                    import gemini_client
+                    is_online = gemini_client.is_online()
+                except Exception:
+                    try:
+                        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                        s.connect(("8.8.8.8", 80))
+                        s.close()
+                        is_online = True
+                    except Exception:
+                        is_online = False
+
+                if is_online:
+                    try:
+                        if on_partial:
+                            on_partial("Transcribing (Google Cloud)...")
+                        t0 = time.monotonic()
+                        google_text = _transcribe_google(raw_audio, sample_rate)
+                        if google_text:
+                            _dbg(f"Google Voice ({time.monotonic() - t0:.2f}s): '{google_text}'")
+                            return google_text
+                        _dbg("Google Voice detected no speech or silent; trying Whisper fallback")
+                    except Exception as e_g:
+                        _dbg(f"Google Voice error: {e_g}")
+
+            # Fallback to local Whisper
             w_model = _get_whisper_model()
             if w_model:
                 try:

@@ -170,11 +170,84 @@ def center_window(win, width: int, height: int):
 
 
 # ---------------------------------------------------------------------------
+# Real-Time Streaming Speech Synthesizer
+# ---------------------------------------------------------------------------
+_SENTENCE_ABBREVIATIONS = {
+    "mr.", "mrs.", "ms.", "dr.", "prof.", "e.g.", "i.e.", "vs.", "etc.", "approx.", "u.s.", "inc.", "ltd."
+}
+
+
+class StreamingSpeechSynthesizer:
+    """
+    Sentence-by-sentence streaming speech synthesizer.
+    Pipes streaming LLM response tokens into speech units as they are generated,
+    allowing DISHA to start speaking within ~300ms while the rest of the text
+    continues typing onto the screen.
+    """
+
+    def __init__(self, on_sentence: Optional[Callable[[str], None]] = None):
+        self.on_sentence = on_sentence or (lambda s: voice.speak(s, wait=False))
+        self.processed_idx = 0
+        self.accumulated = ""
+        self.emitted_count = 0
+
+    def feed(self, current_full_text: str):
+        self.accumulated = current_full_text
+        tail = self.accumulated[self.processed_idx:]
+        if not tail:
+            return
+
+        import re
+        search_start = 0
+        while True:
+            # Match sentence terminators (. ! ?) followed by whitespace or explicit newline
+            match = re.search(r'([.?!]+(?:\s+|\n+)|\n+)', tail[search_start:])
+            if not match:
+                break
+
+            end_pos = search_start + match.end()
+            candidate = tail[:end_pos]
+            clean_candidate = candidate.strip()
+
+            # Skip list bullets or numeric prefixes like '1.' or '- '
+            if re.match(r'^\s*(\d+\.|[-*•])\s*$', clean_candidate):
+                search_start = end_pos
+                continue
+
+            # Skip common abbreviations
+            last_word = clean_candidate.split()[-1].lower() if clean_candidate.split() else ''
+            if last_word in _SENTENCE_ABBREVIATIONS:
+                search_start = end_pos
+                continue
+
+            # Don't emit tiny fragments unless there's an explicit newline
+            if len(clean_candidate) < 4 and '\n' not in candidate:
+                search_start = end_pos
+                continue
+
+            self.processed_idx += end_pos
+            tail = self.accumulated[self.processed_idx:]
+            search_start = 0
+            self.emitted_count += 1
+            self.on_sentence(clean_candidate)
+
+    def finish(self, fallback_text: Optional[str] = None):
+        """Flush any remaining un-emitted text when the stream ends."""
+        if fallback_text and not self.accumulated:
+            self.accumulated = fallback_text
+        tail = self.accumulated[self.processed_idx:].strip()
+        if tail:
+            self.emitted_count += 1
+            self.on_sentence(tail)
+            self.processed_idx = len(self.accumulated)
+        elif self.emitted_count == 0 and fallback_text and fallback_text.strip():
+            self.emitted_count += 1
+            self.on_sentence(fallback_text.strip())
+
+
+# ---------------------------------------------------------------------------
 # DISHA Interactive Overlay Window
 # ---------------------------------------------------------------------------
-_assistant_window = None
-
-
 _assistant_window = None
 
 
@@ -747,20 +820,24 @@ class DishaAssistantWindow:
                 self.set_status("Thinking...")
             ))
 
+            voice.stop_speaking()
             streamed = [False]
+            synthesizer = StreamingSpeechSynthesizer()
 
             def on_stream(chunk_text):
                 streamed[0] = True
                 self.root.after(0, lambda t=chunk_text: self.append_streaming_chunk(t))
+                synthesizer.feed(chunk_text)
 
             answer = route_request(heard, on_chunk=on_stream)
             if not streamed[0]:
                 self.root.after(0, lambda: self.append_message("DISHA", answer))
+                voice.speak(answer, wait=False)
             else:
                 self.root.after(0, self.finish_streaming)
+                synthesizer.finish(fallback_text=answer)
 
             self.root.after(0, lambda: self.set_status("Ready."))
-            voice.speak(answer, wait=False)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -782,24 +859,29 @@ class DishaAssistantWindow:
         self.status_pill.configure(text=" ● THINKING... ", bg="#3b0764", fg="#c084fc")
         self.set_status("Thinking...")
 
+        voice.stop_speaking()
+
         def worker():
             streamed = [False]
+            synthesizer = StreamingSpeechSynthesizer()
 
             def on_stream(chunk_text):
                 streamed[0] = True
                 self.root.after(0, lambda t=chunk_text: self.append_streaming_chunk(t))
+                synthesizer.feed(chunk_text)
 
             answer = route_request(query, on_chunk=on_stream)
             if not streamed[0]:
                 self.root.after(0, lambda: self.append_message("DISHA", answer))
+                voice.speak(answer, wait=False)
             else:
                 self.root.after(0, self.finish_streaming)
+                synthesizer.finish(fallback_text=answer)
 
             self.root.after(0, lambda: (
                 self.set_listening_indicator(False),
                 self.set_status("Ready.")
             ))
-            voice.speak(answer, wait=False)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -909,24 +991,29 @@ class DishaAssistantWindow:
                     self.set_status("Thinking...")
                 ))
 
+                voice.stop_speaking()
                 streamed = [False]
+                synthesizer = StreamingSpeechSynthesizer()
 
                 def on_stream(chunk_text):
                     streamed[0] = True
                     self.root.after(0, lambda t=chunk_text: self.append_streaming_chunk(t))
+                    synthesizer.feed(chunk_text)
 
                 answer = route_request(heard, on_chunk=on_stream)
                 if not streamed[0]:
                     self.root.after(0, lambda: self.append_message("DISHA", answer))
+                    voice.speak(answer, wait=False)
                 else:
                     self.root.after(0, self.finish_streaming)
+                    synthesizer.finish(fallback_text=answer)
 
                 self.root.after(0, lambda: (
                     self.status_pill.configure(text=" ● LIVE VOICE: SPEAKING ", bg="#86198f", fg="#fdf4ff"),
                     self.set_status("Speaking reply...")
                 ))
-                # Crucial: wait=True ensures DISHA finishes speaking before listening again!
-                voice.speak(answer, wait=True)
+                # Crucial: wait for all queued speech sentences to finish before mic resumes!
+                voice.wait_for_tts()
                 self.root.after(0, lambda: self.set_status("Listening for follow-up..."))
 
         threading.Thread(target=_voice_loop, daemon=True).start()
@@ -935,6 +1022,7 @@ class DishaAssistantWindow:
         """Halt continuous voice loop and restore standard ready state."""
         self._voice_mode_active = False
         voice.cancel_listen()
+        voice.stop_speaking()
         self.voice_mode_btn.configure(
             text="🗣️ Voice Mode",
             bg="#1c1929",
@@ -1276,6 +1364,8 @@ def main():
 
     root = tk.Tk()
     root.withdraw()
+    voice.set_root(root)
+    voice.preload_stt()
 
     # IPC Single-instance guard: if another instance tries to launch, focus this window
     def _activate_callback():

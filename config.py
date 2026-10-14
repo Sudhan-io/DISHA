@@ -32,7 +32,7 @@ TTS_ENGINE         = os.getenv("DISHA_TTS_ENGINE", "neural").lower() # "neural" 
 TTS_NEURAL_VOICE   = os.getenv("DISHA_TTS_NEURAL_VOICE", "en-US-AnaNeural") # anime / e-girl neural character voice
 TTS_RATE           = int(os.getenv("DISHA_TTS_RATE", "175"))
 TTS_VOICE_GENDER   = os.getenv("DISHA_TTS_VOICE", "female")
-SILENCE_STOP_SECONDS = float(os.getenv("DISHA_SILENCE_STOP", "0.75"))
+SILENCE_STOP_SECONDS = float(os.getenv("DISHA_SILENCE_STOP", "0.55"))
 
 # ── Voice Model Personas ─────────────────────────────────────────────────────
 VOICES_DIR         = BASE_DIR / "models" / "voices"

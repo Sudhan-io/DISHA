@@ -529,7 +529,7 @@ def _transcribe_google(raw_audio: bytes, sample_rate: int = 16000) -> Optional[s
 def stt_status() -> str:
     """Human-readable description of active speech models."""
     mode = getattr(_cfg, "STT_ENGINE", "auto").lower()
-    whisper_info = f"{_whisper_name or getattr(_cfg, 'WHISPER_MODEL_SIZE', 'small.en')} on {_whisper_device}"
+    whisper_info = f"{_whisper_name or getattr(_cfg, 'WHISPER_MODEL_SIZE', 'large-v3-turbo')} on {_whisper_device}"
     if mode == "auto":
         return f"Hybrid (Online: Google Voice + Offline: OpenAI Whisper {whisper_info})"
     elif mode in ("google", "online"):
@@ -547,7 +547,7 @@ def _get_whisper_model():
                 _add_cuda_dll_dirs()
                 from faster_whisper import WhisperModel
                 import ctranslate2
-                model_size = getattr(_cfg, "WHISPER_MODEL_SIZE", "base.en")
+                model_size = getattr(_cfg, "WHISPER_MODEL_SIZE", "large-v3-turbo")
                 loaded = False
                 try:
                     has_cuda = ctranslate2.get_cuda_device_count() > 0

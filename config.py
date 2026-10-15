@@ -23,7 +23,7 @@ VOICE_HOTKEY       = os.getenv("DISHA_VOICE_HOTKEY", "<ctrl>+<alt>+v")
 
 # ── Voice / STT ─────────────────────────────────────────────────────────────
 STT_ENGINE         = os.getenv("DISHA_STT_ENGINE", "auto").lower() # "auto", "google", "whisper", or "vosk"
-WHISPER_MODEL_SIZE = os.getenv("DISHA_WHISPER_MODEL", "small.en")  # "tiny.en", "base.en", "small.en", "medium.en"
+WHISPER_MODEL_SIZE = os.getenv("DISHA_WHISPER_MODEL", "large-v3-turbo")  # "large-v3-turbo", "large-v3", "large-v2"
 WHISPER_BEAM_SIZE  = int(os.getenv("DISHA_WHISPER_BEAM", "1"))     # 1 for fast greedy decoding, 5 for beam search
 GOOGLE_STT_LANG    = os.getenv("DISHA_GOOGLE_STT_LANG", "en-US")   # Language code for Google Speech recognition
 VOSK_MODEL_PATH    = os.getenv("VOSK_MODEL_PATH", str(BASE_DIR / "model"))

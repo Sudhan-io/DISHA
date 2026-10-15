@@ -35,6 +35,7 @@ import voice
 import usb_guard
 import web_interface
 import settings_dialog
+import local_llm
 
 # ---------------------------------------------------------------------------
 # Single-instance guard with IPC activation
@@ -60,12 +61,20 @@ def acquire_single_instance_lock(on_activate: Optional[Callable] = None) -> bool
                 while True:
                     try:
                         conn, _ = _lock_socket.accept()
-                        data = conn.recv(1024).decode("utf-8", errors="ignore").strip()
-                        conn.close()
-                        if data == "ACTIVATE":
-                            on_activate()
                     except Exception:
                         break
+                    try:
+                        conn.settimeout(2.0)
+                        data = conn.recv(1024).decode("utf-8", errors="ignore").strip()
+                        conn.close()
+                        if "ACTIVATE" in data:
+                            on_activate()
+                    except Exception:
+                        try:
+                            conn.close()
+                        except Exception:
+                            pass
+                        continue
 
             threading.Thread(target=_listen_loop, daemon=True).start()
 
@@ -1246,6 +1255,7 @@ def build_tray_icon(root):
 
     def on_quit(icon, item):
         icon.stop()
+        local_llm.stop_ollama()
         root.after(0, root.quit)
 
     menu_items = [
@@ -1366,6 +1376,7 @@ def main():
     root.withdraw()
     voice.set_root(root)
     voice.preload_stt()
+    threading.Thread(target=local_llm.start_ollama, daemon=True).start()
 
     # IPC Single-instance guard: if another instance tries to launch, focus this window
     def _activate_callback():

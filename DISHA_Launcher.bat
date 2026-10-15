@@ -1,42 +1,77 @@
 @echo off
 REM ====================================================================
 REM DISHA Launcher
-REM Auto-detects drive letter, checks running status, and launches cleanly.
+REM Auto-starts Ollama local AI server and DISHA, and cleanly stops
+REM Ollama when the DISHA task ends.
 REM ====================================================================
 title DISHA AI Assistant Launcher
 cd /d "%~dp0"
 set SCRIPT_DIR=%~dp0
 set DRIVE=%~d0
 
-set PYTHONW=%SCRIPT_DIR%venv\Scripts\pythonw.exe
-set PYTHON=%SCRIPT_DIR%venv\Scripts\python.exe
-set MAIN=%SCRIPT_DIR%main.py
+echo ====================================================
+echo          DISHA AI Assistant Launcher
+echo ====================================================
+echo.
 
-if not exist "%PYTHONW%" (
-    if exist "%PYTHON%" (
-        set PYTHONW=%PYTHON%
+REM 1. Set Ollama models directory
+if exist "D:\Ollama\models" (
+    set OLLAMA_MODELS=D:\Ollama\models
+)
+
+REM 2. Detect Ollama executable
+set OLLAMA_EXE=
+if exist "D:\Ollama\ollama.exe" set OLLAMA_EXE=D:\Ollama\ollama.exe
+if not defined OLLAMA_EXE for /f "tokens=*" %%i in ('where ollama 2^>nul') do set OLLAMA_EXE=%%i
+if not defined OLLAMA_EXE if exist "%LOCALAPPDATA%\Programs\Ollama\ollama.exe" set OLLAMA_EXE=%LOCALAPPDATA%\Programs\Ollama\ollama.exe
+if not defined OLLAMA_EXE if exist "%ProgramFiles%\Ollama\ollama.exe" set OLLAMA_EXE=%ProgramFiles%\Ollama\ollama.exe
+
+REM 3. Start Ollama in background if not already running
+netstat -ano | findstr 11434 | findstr LISTENING >nul 2>&1
+if %errorlevel% neq 0 (
+    if defined OLLAMA_EXE (
+        echo [INFO] Starting Ollama local AI server...
+        start "" /b "%OLLAMA_EXE%" serve
+        timeout /t 2 /nobreak >nul
     ) else (
-        echo [ERROR] DISHA virtual environment not found!
-        echo Looked at: "%PYTHONW%"
-        echo Please ensure the venv folder is installed in the DISHA directory.
-        pause
-        exit /b 1
+        echo [WARN] Ollama executable not found. Offline local LLM will be disabled.
     )
+) else (
+    echo [INFO] Ollama is already active on port 11434.
 )
 
-REM If running from an external portable drive (not C: or D:), enforce USB portable security
-if /i not "%DRIVE%"=="C:" if /i not "%DRIVE%"=="D:" (
-    set DISHA_USB_MODE=true
+REM 4. Check for virtual environment python
+set PYTHON=%SCRIPT_DIR%venv\Scripts\python.exe
+if not exist "%PYTHON%" (
+    echo [ERROR] Virtual environment not found at: "%PYTHON%"
+    echo Please make sure the venv folder exists in %SCRIPT_DIR%
+    pause
+    exit /b 1
 )
 
-REM Check if DISHA is already running
+REM 5. Clean up any previous dead/zombie DISHA instances on port 54321
 netstat -ano | findstr 54321 | findstr LISTENING >nul 2>&1
 if %errorlevel% equ 0 (
-    echo [INFO] DISHA is already active!
-    echo Bringing window to front...
-    "%PYTHON%" -c "import socket; s=socket.socket(); s.connect(('127.0.0.1', 54321)); s.sendall(b'ACTIVATE\n'); s.close()" >nul 2>&1
-    exit /b 0
+    echo [INFO] Cleaning up previous DISHA session on port 54321...
+    for /f "tokens=5" %%a in ('netstat -ano ^| findstr 54321 ^| findstr LISTENING') do (
+        taskkill /F /PID %%a >nul 2>&1
+    )
+    timeout /t 1 /nobreak >nul
 )
 
-echo Starting DISHA AI Assistant...
-start "" /d "%SCRIPT_DIR%" "%PYTHONW%" "%MAIN%"
+REM 6. Run DISHA (runs until you close DISHA or this task)
+echo.
+echo [INFO] Launching DISHA AI Assistant...
+echo [INFO] Keep this window open while using DISHA, or close it to stop DISHA and Ollama.
+echo.
+"%PYTHON%" "%SCRIPT_DIR%main.py"
+
+REM 7. When DISHA task ends, automatically shut down Ollama
+echo.
+echo ====================================================
+echo   DISHA ended. Stopping Ollama server...
+echo ====================================================
+taskkill /F /IM ollama.exe >nul 2>&1
+echo [OK] Ollama stopped cleanly.
+timeout /t 1 /nobreak >nul
+exit /b 0

@@ -4,11 +4,35 @@ Wraps Ollama's REST API for offline AI reasoning.
 Only used when gemini_client.is_online() returns False.
 """
 
+import atexit
 import json
+import os
+import shutil
+import subprocess
+import time
+from pathlib import Path
 from typing import Callable, Optional
 import requests
 
 from config import OLLAMA_MODEL, OLLAMA_URL, SYSTEM_PROMPT
+
+_ollama_process = None
+
+
+def get_ollama_path() -> Optional[str]:
+    """Find installed path to ollama.exe."""
+    candidates = [
+        Path(r"D:\Ollama\ollama.exe"),
+        Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Ollama" / "ollama.exe",
+        Path(os.environ.get("ProgramFiles", "")) / "Ollama" / "ollama.exe",
+    ]
+    for c in candidates:
+        if c.is_file():
+            return str(c)
+    w = shutil.which("ollama")
+    if w:
+        return w
+    return None
 
 
 def is_ollama_running() -> bool:
@@ -21,13 +45,65 @@ def is_ollama_running() -> bool:
         return False
 
 
+def start_ollama() -> bool:
+    """Start Ollama daemon in background if not already listening on port 11434."""
+    global _ollama_process
+    if is_ollama_running():
+        return True
+    exe = get_ollama_path()
+    if not exe:
+        return False
+    env = os.environ.copy()
+    if os.path.isdir(r"D:\Ollama\models"):
+        env["OLLAMA_MODELS"] = r"D:\Ollama\models"
+    try:
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+        _ollama_process = subprocess.Popen(
+            [exe, "serve"],
+            env=env,
+            creationflags=creationflags,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        for _ in range(15):
+            time.sleep(0.2)
+            if is_ollama_running():
+                return True
+    except Exception as e:
+        print(f"[Ollama] Failed to start daemon: {e}")
+    return is_ollama_running()
+
+
+def stop_ollama() -> None:
+    """Terminate Ollama daemon when DISHA exits."""
+    global _ollama_process
+    if _ollama_process is not None:
+        try:
+            _ollama_process.terminate()
+            _ollama_process.wait(timeout=2)
+        except Exception:
+            try:
+                _ollama_process.kill()
+            except Exception:
+                pass
+        _ollama_process = None
+    try:
+        subprocess.run(["taskkill", "/F", "/IM", "ollama.exe"], capture_output=True, check=False)
+    except Exception:
+        pass
+
+
+atexit.register(stop_ollama)
+
+
 def ask_local(prompt: str, context: str = "") -> str:
     """
     Call Ollama for offline reasoning.
     Returns response text or a friendly fallback message on failure.
     """
     if not is_ollama_running():
-        return "I'm offline, and the local Ollama service is not currently running."
+        if not start_ollama():
+            return "I'm offline, and the local Ollama service is not currently running."
 
     try:
         full_prompt = f"{SYSTEM_PROMPT}\n\n{context}\n\nUser: {prompt}\nDISHA:" if context else f"{SYSTEM_PROMPT}\n\nUser: {prompt}\nDISHA:"
@@ -62,10 +138,11 @@ def ask_local_streaming(
     Invokes on_chunk(partial_accumulated_text) as tokens arrive.
     """
     if not is_ollama_running():
-        msg = "I'm offline, and the local Ollama service is not currently running."
-        if on_chunk:
-            on_chunk(msg)
-        return msg
+        if not start_ollama():
+            msg = "I'm offline, and the local Ollama service is not currently running."
+            if on_chunk:
+                on_chunk(msg)
+            return msg
 
     try:
         full_prompt = f"{SYSTEM_PROMPT}\n\n{context}\n\nUser: {prompt}\nDISHA:" if context else f"{SYSTEM_PROMPT}\n\nUser: {prompt}\nDISHA:"

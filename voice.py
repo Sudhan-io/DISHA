@@ -35,13 +35,32 @@ vosk.SetLogLevel(-1)  # quiet Vosk's default console spam
 # ---------------------------------------------------------------------------
 # Tunables (optional: define any of these in config.py to override)
 # ---------------------------------------------------------------------------
-MIN_RMS = getattr(_cfg, "VOICE_MIN_RMS", 15.0)                # absolute loudness floor (calibrated for real laptop & headset mics)
+MIN_RMS = getattr(_cfg, "VOICE_MIN_RMS", 1.8)                 # absolute loudness floor (calibrated for real laptop & headset mics)
 NOISE_MARGIN = getattr(_cfg, "VOICE_NOISE_MARGIN", 1.25)       # speech must be this x louder than room noise
 MIN_SPEECH_SECONDS = getattr(_cfg, "VOICE_MIN_SPEECH_SECONDS", 0.2)
 NO_SPEECH_TIMEOUT = getattr(_cfg, "VOICE_NO_SPEECH_TIMEOUT", 5.0)   # give up if you never speak
 MAX_LISTEN_SECONDS = getattr(_cfg, "VOICE_MAX_SECONDS", 20.0)
 MIN_AVG_CONF = getattr(_cfg, "VOICE_MIN_AVG_CONF", 0.45)      # average word confidence required (for Vosk)
 SINGLE_WORD_CONF = getattr(_cfg, "VOICE_SINGLE_WORD_CONF", 0.60)  # one-word results must be surer (for Vosk)
+
+
+def _ensure_mic_volume() -> None:
+    """Ensure Windows microphone input volume is at least 80% and not muted."""
+    try:
+        from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+        from comtypes import CLSCTX_ALL
+        device = AudioUtilities.GetMicrophone()
+        if device:
+            interface = device.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+            volume = ctypes.cast(interface, ctypes.POINTER(IAudioEndpointVolume))
+            cur = volume.GetMasterVolumeLevelScalar()
+            if cur < 0.70:
+                volume.SetMasterVolumeLevelScalar(0.85, None)
+            if volume.GetMute():
+                volume.SetMute(0, None)
+    except Exception:
+        pass
+
 
 def _is_device_openable(dev_idx: int) -> bool:
     try:
@@ -64,9 +83,10 @@ def get_mic_device() -> Optional[int]:
     """
     Resolve the best available microphone:
     1. If DISHA_MIC_DEVICE is configured (as index or name substring), find it if openable.
-    2. Auto-detect: if a connected headset / earbuds / wireless mic exists, prioritize it.
-    3. Auto-detect: prioritize DirectSound microphone array over silent MME.
-    4. Fallback to system default input device (if openable), or first openable input.
+    2. System default input device (from Windows Sound Settings) if openable.
+    3. DirectSound microphone (higher quality & dynamic range on Windows).
+    4. Connected headset / earbuds / wireless mic if active.
+    5. Any openable input.
     """
     cfg = getattr(_cfg, "MIC_DEVICE", os.getenv("DISHA_MIC_DEVICE", ""))
     devs = sd.query_devices()
@@ -84,13 +104,10 @@ def get_mic_device() -> Optional[int]:
                 if _is_device_openable(i):
                     return i
 
-    # 2. Connected headset / earbuds / wireless mic
-    for i, d in enumerate(devs):
-        if d.get("max_input_channels", 0) > 0:
-            name_low = d.get("name", "").lower()
-            if any(k in name_low for k in ["headset", "buds", "enco", "airpods", "wireless"]):
-                if _is_device_openable(i):
-                    return i
+    # 2. System default input (what Windows actively has selected in Sound Settings)
+    def_in = sd.default.device[0]
+    if def_in is not None and def_in >= 0 and _is_device_openable(def_in):
+        return def_in
 
     # 3. DirectSound microphone (higher quality & dynamic range on Windows)
     for i, d in enumerate(devs):
@@ -104,10 +121,13 @@ def get_mic_device() -> Optional[int]:
                 if _is_device_openable(i):
                     return i
 
-    # 4. System default input (if openable)
-    def_in = sd.default.device[0]
-    if def_in is not None and def_in >= 0 and _is_device_openable(def_in):
-        return def_in
+    # 4. Connected headset / earbuds / wireless mic
+    for i, d in enumerate(devs):
+        if d.get("max_input_channels", 0) > 0:
+            name_low = d.get("name", "").lower()
+            if any(k in name_low for k in ["headset", "buds", "enco", "airpods", "wireless"]):
+                if _is_device_openable(i):
+                    return i
 
     # 5. Any openable input
     for i, d in enumerate(devs):
@@ -732,6 +752,7 @@ def listen(sample_rate: int = 16000, max_seconds: float = None, on_partial=None)
     try:
         _interrupt_event.clear()
         _wait_for_tts()
+        _ensure_mic_volume()
 
         stt_mode = getattr(_cfg, "STT_ENGINE", "auto").lower()
         model = _get_stt_model()

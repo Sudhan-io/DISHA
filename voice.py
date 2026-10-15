@@ -595,6 +595,34 @@ PHANTOM_PHRASES = {
 _prompt_cache = None
 
 
+def _clean_whisper_repetition(text: str) -> str:
+    """
+    Detect and collapse Whisper autoregressive repetition loops (e.g. 'vscode. vscode. vscode. ...')
+    down to a single clean utterance.
+    """
+    if not text:
+        return ""
+    import re
+    cleaned = text.strip()
+    tokens = [w.lower() for w in re.findall(r"\b[\w'-]+\b", cleaned)]
+    if len(tokens) >= 3:
+        unique = set(tokens)
+        if len(unique) == 1:
+            return tokens[0]
+        # Check 2-word phrase repeat (e.g. 'vs code vs code vs code')
+        if len(tokens) % 2 == 0:
+            first_pair = tokens[:2]
+            if tokens == first_pair * (len(tokens) // 2):
+                return " ".join(first_pair)
+
+    # 2. Regex collapse 3+ repeated word-tokens with optional trailing punctuation
+    cleaned = re.sub(r'(\b\w+[\.\?!,]?\s+)(?:\1){2,}', r'\1', cleaned + " ", flags=re.IGNORECASE).strip()
+    if len(cleaned.split()) == 1:
+        cleaned = cleaned.rstrip(".!? ")
+
+    return cleaned
+
+
 def _build_prompt() -> str:
     """
     A short vocabulary hint. Whisper reads it as 'text that came just before',
@@ -625,15 +653,21 @@ def _build_prompt() -> str:
                 words.append(n)
     except Exception:
         pass
-    # Natural sentence prompt avoids comma splices in Whisper transcription
-    prompt = (f"{name.title()}. Open Chrome. Launch VS Code. Open Calculator. Close Spotify. "
-              f"Set volume to 50. Open Notepad. " + ". ".join(words[:15]) + ".")
-    _prompt_cache = prompt[:500]
+    # Clean vocabulary hint: comma-separated proper nouns and context keywords.
+    # NEVER use command sentences (e.g. 'Launch VS Code.') because Whisper autoregressively
+    # hallucinates and loops words from sentence prompts on low-volume speech or room noise!
+    prompt_terms = [name.title(), "VS Code", "Google Chrome", "Spotify", "Calculator", "Notepad", "YouTube", "Discord", "Terminal"]
+    for w in words:
+        if w not in prompt_terms:
+            prompt_terms.append(w)
+    prompt = ", ".join(prompt_terms[:25])
+    _prompt_cache = prompt[:450]
     return _prompt_cache
 
 
 def _transcribe(w_model, audio_np):
-    """Transcribe with low-latency VAD, anti-hallucination thresholds, and greedy decoding."""
+    """Transcribe with low-latency VAD, anti-hallucination thresholds, repetition penalties, and greedy decoding."""
+    import re
     prompt = _build_prompt()
     beam_size = getattr(_cfg, "WHISPER_BEAM_SIZE", 1)
     segments, _info = w_model.transcribe(
@@ -642,14 +676,17 @@ def _transcribe(w_model, audio_np):
         beam_size=beam_size,
         temperature=0.0,
         vad_filter=True,
-        vad_parameters=dict(threshold=0.45, min_silence_duration_ms=300, speech_pad_ms=180),
+        vad_parameters=dict(threshold=0.5, min_silence_duration_ms=350, speech_pad_ms=180),
         condition_on_previous_text=False,
         initial_prompt=prompt or None,
         no_speech_threshold=0.6,
         log_prob_threshold=-1.0,
         compression_ratio_threshold=2.4,
+        repetition_penalty=1.2,
+        no_repeat_ngram_size=3,
     )
     kept = []
+    last_norm = ""
     for seg in segments:
         text = seg.text.strip()
         if not text:
@@ -660,8 +697,15 @@ def _transcribe(w_model, audio_np):
         if seg.avg_logprob < -1.6:
             _dbg(f"dropped low-confidence segment (logprob={seg.avg_logprob:.2f}): '{text}'")
             continue
+        norm = re.sub(r"[^\w\s]", "", text).lower().strip()
+        if norm and norm == last_norm:
+            _dbg(f"collapsed duplicate consecutive segment: '{text}'")
+            continue
+        last_norm = norm
         kept.append(text)
-    result = " ".join(kept).strip()
+
+    raw_result = " ".join(kept).strip()
+    result = _clean_whisper_repetition(raw_result)
 
     low = result.lower().strip(" .!?,")
     if low in PHANTOM_PHRASES:

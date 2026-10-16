@@ -207,19 +207,82 @@ def _cmd_wifi_name(match) -> str:
         return "Can't read Wi-Fi info right now."
 
 
+def _get_known_folder(folder_name: str) -> Path:
+    """
+    Resolve Windows Known Folders accurately by inspecting Windows User Shell Folders registry,
+    falling back to standard user home directory.
+    Handles user profiles where Downloads, Documents, etc. are relocated to D:, OneDrive, etc.
+    """
+    import winreg
+    guid_map = {
+        "downloads": ("{374DE290-123F-4565-9164-39C4925E467B}", "{F42EE2D3-909F-4907-8871-4C22FC0BF756}"),
+        "documents": ("Personal",),
+        "desktop": ("Desktop",),
+        "pictures": ("My Pictures",),
+        "videos": ("My Video", "{35286A68-3C57-41A1-BBB1-0EAE73D76C95}"),
+        "music": ("My Music", "{A0C69A99-21C8-4671-8703-7934162FCF1D}"),
+    }
+    reg_keys = guid_map.get(folder_name.lower(), ())
+    for rk in reg_keys:
+        try:
+            with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders"
+            ) as key:
+                val, _ = winreg.QueryValueEx(key, rk)
+                if val:
+                    expanded = Path(os.path.expandvars(str(val)))
+                    if expanded.exists():
+                        return expanded
+        except Exception:
+            pass
+    return Path.home() / folder_name.capitalize()
+
+
 def _cmd_open_downloads(match) -> str:
-    os.startfile(Path.home() / "Downloads")
+    folder = _get_known_folder("downloads")
+    if not folder.exists():
+        folder.mkdir(parents=True, exist_ok=True)
+    _launch_target(str(folder))
     return "Opening Downloads."
 
 
 def _cmd_open_documents(match) -> str:
-    os.startfile(Path.home() / "Documents")
+    folder = _get_known_folder("documents")
+    if not folder.exists():
+        folder.mkdir(parents=True, exist_ok=True)
+    _launch_target(str(folder))
     return "Opening Documents."
 
 
 def _cmd_open_desktop(match) -> str:
-    os.startfile(Path.home() / "Desktop")
+    folder = _get_known_folder("desktop")
+    _launch_target(str(folder))
     return "Opening Desktop."
+
+
+def _cmd_open_pictures(match) -> str:
+    folder = _get_known_folder("pictures")
+    if not folder.exists():
+        folder.mkdir(parents=True, exist_ok=True)
+    _launch_target(str(folder))
+    return "Opening Pictures."
+
+
+def _cmd_open_videos(match) -> str:
+    folder = _get_known_folder("videos")
+    if not folder.exists():
+        folder.mkdir(parents=True, exist_ok=True)
+    _launch_target(str(folder))
+    return "Opening Videos."
+
+
+def _cmd_open_music(match) -> str:
+    folder = _get_known_folder("music")
+    if not folder.exists():
+        folder.mkdir(parents=True, exist_ok=True)
+    _launch_target(str(folder))
+    return "Opening Music."
 
 
 def _cmd_empty_bin(match) -> str:
@@ -246,9 +309,12 @@ SYSTEM_PATTERNS: list[tuple[str, Callable]] = [
     (r"(cpu|processor) usage", _cmd_cpu_usage),
     (r"(ram|memory) usage", _cmd_ram_usage),
     (r"(wifi|network|internet) (name|ssid)", _cmd_wifi_name),
-    (r"open (my )?downloads", _cmd_open_downloads),
-    (r"open (my )?documents", _cmd_open_documents),
-    (r"open (my )?desktop", _cmd_open_desktop),
+    (r"open (?:the |my )?downloads?(?: folder)?", _cmd_open_downloads),
+    (r"open (?:the |my )?documents?(?: folder)?", _cmd_open_documents),
+    (r"open (?:the |my )?desktop(?: folder)?", _cmd_open_desktop),
+    (r"open (?:the |my )?(?:pictures?|photos?)(?: folder)?", _cmd_open_pictures),
+    (r"open (?:the |my )?videos?(?: folder)?", _cmd_open_videos),
+    (r"open (?:the |my )?music(?: folder)?", _cmd_open_music),
     (r"empty (recycle )?bin", _cmd_empty_bin),
 ]
 
@@ -578,7 +644,27 @@ def _launch_app(app_name: str) -> Optional[str]:
         if _launch_target(url):
             return f"Opening {clean_name}."
 
-    # 2. Built-in Protocols (Calculator, Settings, Paint, Spotify)
+    # 2. Known User Shell Folders (downloads, documents, desktop, pictures, videos, music)
+    folder_synonyms = {
+        "downloads": "downloads", "download": "downloads", "downloads folder": "downloads", "download folder": "downloads",
+        "my downloads": "downloads", "my downloads folder": "downloads",
+        "documents": "documents", "document": "documents", "documents folder": "documents", "document folder": "documents",
+        "my documents": "documents", "my documents folder": "documents",
+        "desktop": "desktop", "desktop folder": "desktop", "my desktop": "desktop",
+        "pictures": "pictures", "picture": "pictures", "pictures folder": "pictures", "photos": "pictures", "photo": "pictures", "photos folder": "pictures",
+        "my pictures": "pictures", "my photos": "pictures", "my photo": "pictures",
+        "videos": "videos", "video": "videos", "videos folder": "videos", "my videos": "videos",
+        "music": "music", "music folder": "music", "my music": "music",
+    }
+    if clean_name in folder_synonyms:
+        folder_type = folder_synonyms[clean_name]
+        folder_path = _get_known_folder(folder_type)
+        if not folder_path.exists():
+            folder_path.mkdir(parents=True, exist_ok=True)
+        if _launch_target(str(folder_path)):
+            return f"Opening {folder_type.title()}."
+
+    # 3. Built-in Protocols (Calculator, Settings, Paint, Spotify)
     proto = BUILTIN_PROTOCOLS.get(clean_name)
     if proto and _launch_target(proto):
         return f"Opening {app_name}."

@@ -838,20 +838,25 @@ class DishaAssistantWindow:
                 self.root.after(0, lambda t=chunk_text: self.append_streaming_chunk(t))
                 synthesizer.feed(chunk_text)
 
-            answer = route_request(heard, on_chunk=on_stream)
-            if answer and answer.startswith("Opening "):
-                self.root.after(0, lambda: (
-                    self.win.attributes("-topmost", False),
-                    self.win.lower()
-                ))
-            if not streamed[0]:
-                self.root.after(0, lambda: self.append_message("DISHA", answer))
-                voice.speak(answer, wait=False)
-            else:
-                self.root.after(0, self.finish_streaming)
-                synthesizer.finish(fallback_text=answer)
-
-            self.root.after(0, lambda: self.set_status("Ready."))
+            try:
+                answer = route_request(heard, on_chunk=on_stream)
+                if answer and answer.startswith("Opening "):
+                    self.root.after(0, lambda: (
+                        self.win.attributes("-topmost", False),
+                        self.win.lower()
+                    ))
+                if not streamed[0]:
+                    self.root.after(0, lambda: self.append_message("DISHA", answer))
+                    voice.speak(answer, wait=False)
+                else:
+                    self.root.after(0, self.finish_streaming)
+                    synthesizer.finish(fallback_text=answer)
+            except Exception as exc:
+                err_msg = f"Sorry, something went wrong: {exc}"
+                self.root.after(0, lambda: self.append_message("DISHA", err_msg))
+                voice.speak(err_msg, wait=False)
+            finally:
+                self.root.after(0, lambda: self.set_status("Ready."))
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -1014,18 +1019,23 @@ class DishaAssistantWindow:
                     self.root.after(0, lambda t=chunk_text: self.append_streaming_chunk(t))
                     synthesizer.feed(chunk_text)
 
-                answer = route_request(heard, on_chunk=on_stream)
-                if answer and answer.startswith("Opening "):
-                    self.root.after(0, lambda: (
-                        self.win.attributes("-topmost", False),
-                        self.win.lower()
-                    ))
-                if not streamed[0]:
-                    self.root.after(0, lambda: self.append_message("DISHA", answer))
-                    voice.speak(answer, wait=False)
-                else:
-                    self.root.after(0, self.finish_streaming)
-                    synthesizer.finish(fallback_text=answer)
+                try:
+                    answer = route_request(heard, on_chunk=on_stream)
+                    if answer and answer.startswith("Opening "):
+                        self.root.after(0, lambda: (
+                            self.win.attributes("-topmost", False),
+                            self.win.lower()
+                        ))
+                    if not streamed[0]:
+                        self.root.after(0, lambda: self.append_message("DISHA", answer))
+                        voice.speak(answer, wait=False)
+                    else:
+                        self.root.after(0, self.finish_streaming)
+                        synthesizer.finish(fallback_text=answer)
+                except Exception as exc:
+                    err_msg = f"Sorry, something went wrong: {exc}"
+                    self.root.after(0, lambda: self.append_message("DISHA", err_msg))
+                    voice.speak(err_msg, wait=False)
 
                 self.root.after(0, lambda: (
                     self.status_pill.configure(text=" ● LIVE VOICE: SPEAKING ", bg="#86198f", fg="#fdf4ff"),

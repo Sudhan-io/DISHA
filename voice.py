@@ -44,20 +44,37 @@ MIN_AVG_CONF = getattr(_cfg, "VOICE_MIN_AVG_CONF", 0.45)      # average word con
 SINGLE_WORD_CONF = getattr(_cfg, "VOICE_SINGLE_WORD_CONF", 0.60)  # one-word results must be surer (for Vosk)
 
 
+_last_mic_volume_check = 0.0
+
+
 def _ensure_mic_volume() -> None:
     """Ensure Windows microphone input volume is at least 80% and not muted."""
+    global _last_mic_volume_check
+    now = time.monotonic()
+    if now - _last_mic_volume_check < 60.0:
+        return
+    _last_mic_volume_check = now
     try:
-        from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
-        from comtypes import CLSCTX_ALL
-        device = AudioUtilities.GetMicrophone()
-        if device:
-            interface = device.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
-            volume = ctypes.cast(interface, ctypes.POINTER(IAudioEndpointVolume))
-            cur = volume.GetMasterVolumeLevelScalar()
-            if cur < 0.70:
-                volume.SetMasterVolumeLevelScalar(0.85, None)
-            if volume.GetMute():
-                volume.SetMute(0, None)
+        import comtypes
+        comtypes.CoInitialize()
+        try:
+            from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+            from comtypes import CLSCTX_ALL
+            device = AudioUtilities.GetMicrophone()
+            if device:
+                interface = device.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+                if hasattr(interface, "QueryInterface"):
+                    volume = interface.QueryInterface(IAudioEndpointVolume)
+                else:
+                    volume = ctypes.cast(interface, ctypes.POINTER(IAudioEndpointVolume))
+                cur = volume.GetMasterVolumeLevelScalar()
+                if cur < 0.70:
+                    volume.SetMasterVolumeLevelScalar(0.85, None)
+                if volume.GetMute():
+                    volume.SetMute(0, None)
+                del volume, interface, device
+        finally:
+            comtypes.CoUninitialize()
     except Exception:
         pass
 
@@ -206,7 +223,8 @@ def _tts_speak_direct_sapi(text: str) -> bool:
     guarantees audio output on Windows 10/11 even after microphone input.
     """
     try:
-        ctypes.windll.ole32.CoInitialize(None)
+        import pythoncom
+        pythoncom.CoInitialize()
         try:
             speaker = win32com.client.Dispatch("SAPI.SpVoice")
             try:
@@ -229,9 +247,10 @@ def _tts_speak_direct_sapi(text: str) -> bool:
                 pass
             speaker.Speak(text)
             del speaker
+            speaker = None
             return True
         finally:
-            ctypes.windll.ole32.CoUninitialize()
+            pythoncom.CoUninitialize()
     except Exception:
         return False
 
@@ -304,7 +323,8 @@ def _tts_worker():
                 success = _tts_speak_direct_sapi(text)
             if not success:
                 try:
-                    ctypes.windll.ole32.CoInitialize(None)
+                    import pythoncom
+                    pythoncom.CoInitialize()
                     try:
                         engine = pyttsx3.init()
                         engine.setProperty("rate", TTS_RATE)
@@ -312,8 +332,9 @@ def _tts_worker():
                         engine.say(text)
                         engine.runAndWait()
                         del engine
+                        engine = None
                     finally:
-                        ctypes.windll.ole32.CoUninitialize()
+                        pythoncom.CoUninitialize()
                 except Exception:
                     pass
         if done_event:

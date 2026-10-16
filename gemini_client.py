@@ -114,7 +114,7 @@ def ask(prompt: str, context: str = "") -> str:
     try:
         model = _get_model()
         full_prompt = f"{context}\n\nUser: {prompt}" if context else prompt
-        response = model.generate_content(full_prompt)
+        response = model.generate_content(full_prompt, request_options={"timeout": 20.0})
         return response.text.strip() if response.text else "I didn't get a response back — try rephrasing?"
     except Exception as e:
         import local_llm
@@ -164,7 +164,7 @@ def ask_streaming(prompt: str, context: str = "", on_chunk: Optional[Callable[[s
     try:
         model = _get_model()
         full_prompt = f"{context}\n\nUser: {prompt}" if context else prompt
-        response = model.generate_content(full_prompt, stream=True)
+        response = model.generate_content(full_prompt, stream=True, request_options={"timeout": 20.0})
         accumulated = []
         for chunk in response:
             if chunk.text:
@@ -255,7 +255,7 @@ $bmp.Dispose()
             f"Identify open applications, active windows, text, or websites clearly shown on screen. "
             f"Do NOT guess or hallucinate any software, editor, or terminal that is not visibly open."
         )
-        response = model.generate_content([vision_prompt, img])
+        response = model.generate_content([vision_prompt, img], request_options={"timeout": 25.0})
         return response.text.strip() if response.text else "I couldn't analyze what's on the screen."
     except Exception as e:
         return f"Screen analysis error: {_sanitize_error(e)}"

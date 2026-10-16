@@ -494,9 +494,9 @@ def _launch_target(target: str) -> bool:
 
 
 def _clean_input(text: str) -> str:
-    """Normalize speech-to-text artifacts: strip commas, quotes, hyphens, colons, and wake words."""
-    cleaned = re.sub(r"[,;:\-\"'`~]", " ", text).strip().lower()
-    cleaned = re.sub(r"\s+", " ", cleaned).strip(".!? ")
+    """Normalize speech-to-text artifacts: strip punctuation, colons, hyphens, and wake words."""
+    cleaned = re.sub(r"[,;:\-\"'`~?!.]", " ", text).strip().lower()
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
     # Strip leading assistant names / wake words
     cleaned = re.sub(r"^(?:hey\s+disha|disha|ok\s+disha|okay\s+disha)\s*", "", cleaned).strip()
     return cleaned
@@ -505,44 +505,58 @@ def _clean_input(text: str) -> str:
 def _extract_app_action(text: str) -> Optional[tuple[str, str]]:
     """
     Extract action ('open' or 'close') and target app from natural phrasing.
-    Resilient to Whisper commas, punctuation, and speech artifacts.
-    Supports prefixes like 'can you open', 'please open', 'go to', 'open up', 'fire up', etc.
+    Resilient to Whisper punctuation, speech artifacts, and polite conversation.
+    Supports prefixes like 'can you please open', 'can you just open', 'just open',
+    'opening', 'open up', 'fire up', etc., and collapses repeated clauses.
     """
     cleaned = _clean_input(text)
+    if not cleaned:
+        return None
 
-    # 1. Open action pattern
-    open_regex = re.compile(
-        r"^(?:please\s+|can\s+you\s+|could\s+you\s+|would\s+you\s+)?"
-        r"(?:open|launch|start|run|bring\s+up|fire\s+up|go\s+to|goto|go)"
-        r"(?:\s+up|\s+the|\s+my|\s+app|\s+application)*\s+"
-        r"(.+?)"
-        r"(?:\s+please|\s+for\s+me|\s+now|\s+app|\s+application)*$",
-        re.IGNORECASE
-    )
-    m_open = open_regex.match(cleaned)
-    if m_open:
-        target = m_open.group(1).strip()
-        target = re.sub(r"^(?:the|my|up|app)\s+", "", target).strip()
-        target = re.sub(r"[,;:\-\"'`~.!?]", "", target).strip()
-        if target:
-            return ("open", target)
-
-    # 2. Close action pattern
-    close_regex = re.compile(
-        r"^(?:please\s+|can\s+you\s+|could\s+you\s+|would\s+you\s+)?"
+    # 1. Close/kill action pattern (multi-word polite prefix resilient)
+    close_pat = (
+        r"^(?:(?:please|can\s+you|could\s+you|would\s+you|just|and|will\s+you)\s+)*"
         r"(?:close|quit|kill|exit|terminate|shut\s+down)"
-        r"(?:\s+the|\s+my|\s+app|\s+application)*\s+"
+        r"(?:\s+(?:up|the|my|app|application))*\s+"
         r"(.+?)"
-        r"(?:\s+please|\s+for\s+me|\s+now|\s+app|\s+application)*$",
-        re.IGNORECASE
+        r"(?:\s+(?:please|for\s+me|now|app|application))*$"
     )
-    m_close = close_regex.match(cleaned)
+    m_close = re.match(close_pat, cleaned, re.IGNORECASE)
     if m_close:
-        target = m_close.group(1).strip()
-        target = re.sub(r"^(?:the|my|app)\s+", "", target).strip()
-        target = re.sub(r"[,;:\-\"'`~.!?]", "", target).strip()
-        if target:
-            return ("close", target)
+        tgt = re.sub(r"^(?:the|my|app)\s+", "", m_close.group(1).strip()).strip()
+        if tgt:
+            return ("close", tgt)
+
+    # 2. Open action pattern (handles 'can you please', 'can you just', 'just', 'opening', etc.)
+    open_pat = (
+        r"^(?:(?:please|can\s+you|could\s+you|would\s+you|just|and\s+you|and|will\s+you|i\s+want\s+you\s+to|i\s+want\s+to|help\s+me|lets|let\s+us)\s+)*"
+        r"(?:open|opening|launch|launching|start|starting|run|running|bring\s+up|fire\s+up|go\s+to|goto|go)"
+        r"(?:\s+(?:up|the|my|app|application))*\s+"
+        r"(.+?)"
+        r"(?:\s+(?:please|for\s+me|now|app|application))*$"
+    )
+    m_open = re.match(open_pat, cleaned, re.IGNORECASE)
+    if m_open:
+        tgt = re.sub(r"^(?:the|my|up|app)\s+", "", m_open.group(1).strip()).strip()
+        # If target has a repeated clause like 'vs code open vs code'
+        words = tgt.split()
+        if len(words) >= 4 and len(words) % 2 == 0:
+            half = len(words) // 2
+            if words[:half] == words[half:]:
+                tgt = " ".join(words[:half])
+        tgt = re.sub(r"\s+(?:open|opening|launch|start)\s+.*$", "", tgt).strip()
+        if tgt:
+            return ("open", tgt)
+
+    # 3. Secondary scan: if the phrase contains 'open <app>' somewhere
+    # e.g. 'can you just open vs code open vs code'
+    sub_matches = re.findall(r"(?:open|opening|launch|launching|start)\s+([a-zA-Z0-9\s]+?)(?:\s+(?:open|opening|launch|start)|$)", cleaned)
+    if sub_matches:
+        cand = sub_matches[0].strip()
+        cand = re.sub(r"^(?:the|my|up|app)\s+", "", cand).strip()
+        cand = re.sub(r"\s+(?:please|for\s+me|now|app|application)$", "", cand).strip()
+        if cand:
+            return ("open", cand)
 
     return None
 

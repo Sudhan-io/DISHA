@@ -656,32 +656,7 @@ def _build_prompt() -> str:
         _prompt_cache = ""
         return ""
     name = getattr(_cfg, "APP_NAME", "Disha")
-    words = []
-    try:
-        for k in list(getattr(_cfg, "APP_COMMANDS", {}).keys()):
-            if 2 < len(k) <= 20 and k not in words:
-                words.append(k)
-    except Exception:
-        pass
-    try:
-        import app_launcher
-        apps_dict = getattr(app_launcher, "_discovered_apps", None)
-        if apps_dict is None:
-            apps_dict = app_launcher._discover_installed_apps()
-        for n in list(apps_dict.keys())[:30]:
-            if 2 < len(n) <= 20 and n not in words:
-                words.append(n)
-    except Exception:
-        pass
-    # Clean vocabulary hint: comma-separated proper nouns and context keywords.
-    # NEVER use command sentences (e.g. 'Launch VS Code.') because Whisper autoregressively
-    # hallucinates and loops words from sentence prompts on low-volume speech or room noise!
-    prompt_terms = [name.title(), "VS Code", "Google Chrome", "Spotify", "Calculator", "Notepad", "YouTube", "Discord", "Terminal"]
-    for w in words:
-        if w not in prompt_terms:
-            prompt_terms.append(w)
-    prompt = ", ".join(prompt_terms[:25])
-    _prompt_cache = prompt[:450]
+    _prompt_cache = f"{name.title()}, VS Code, Google Chrome, Spotify, Calculator, Notepad, Terminal."
     return _prompt_cache
 
 
@@ -731,10 +706,19 @@ def _transcribe(w_model, audio_np):
     if low in PHANTOM_PHRASES:
         _dbg(f"dropped phantom phrase: '{result}'")
         return ""
-    # Only drop if it echoes 5+ consecutive words from the vocabulary prompt
-    if prompt and len(low.split()) >= 5 and low in prompt.lower():
-        _dbg(f"dropped echo of vocabulary prompt: '{result}'")
-        return ""
+
+    # Drop prompt hallucinations (when Whisper echoes back words from the vocabulary hint)
+    if prompt and len(low.split()) >= 4:
+        p_words = set(re.findall(r"\b\w+\b", prompt.lower()))
+        r_words = re.findall(r"\b\w+\b", low)
+        if r_words:
+            overlap = sum(1 for w in r_words if w in p_words)
+            action_verbs = {"open", "opening", "launch", "launching", "start", "close", "quit", "exit", "kill", "what", "how", "tell", "show", "calculate", "play", "set"}
+            has_action = any(w in action_verbs for w in r_words)
+            if not has_action and (overlap / len(r_words)) >= 0.60:
+                _dbg(f"dropped vocabulary prompt echo: '{result}'")
+                return ""
+
     return result
 
 

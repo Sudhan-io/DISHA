@@ -839,6 +839,11 @@ class DishaAssistantWindow:
                 synthesizer.feed(chunk_text)
 
             answer = route_request(heard, on_chunk=on_stream)
+            if answer and answer.startswith("Opening "):
+                self.root.after(0, lambda: (
+                    self.win.attributes("-topmost", False),
+                    self.win.lower()
+                ))
             if not streamed[0]:
                 self.root.after(0, lambda: self.append_message("DISHA", answer))
                 voice.speak(answer, wait=False)
@@ -1010,6 +1015,11 @@ class DishaAssistantWindow:
                     synthesizer.feed(chunk_text)
 
                 answer = route_request(heard, on_chunk=on_stream)
+                if answer and answer.startswith("Opening "):
+                    self.root.after(0, lambda: (
+                        self.win.attributes("-topmost", False),
+                        self.win.lower()
+                    ))
                 if not streamed[0]:
                     self.root.after(0, lambda: self.append_message("DISHA", answer))
                     voice.speak(answer, wait=False)
